@@ -2208,7 +2208,7 @@ def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cu
                     rms_residuals = np.asarray([ np.sqrt(np.mean(np.abs(sinc_vector - np.sum(fit_components[:k],axis=0))**2.)) for k in range(nf)])
                     nterms.append(np.max(np.where(rms_residuals>=avg_suppression[fn])))
 
-            amat.append(np.exp(2j * np.pi * (yg[:,:nterms[fn]]-xc) * fc ) * dpss_vectors[:nterms[fn]].T )
+                amat.append(np.exp(2j * np.pi * (yg[:,:nterms[fn]]-xc) * fc ) * dpss_vectors[:nterms[fn]].T )
 
         else:
             for fc, fw, nt in zip(filter_centers, filter_half_widths, nterms):
