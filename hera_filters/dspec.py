@@ -2179,18 +2179,20 @@ def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cu
         nf = len(x)
         df = np.abs(x[1]-x[0])
         xg, yg = np.meshgrid(x,x)
+        amat = []
         if xc is None:
             xc = x[nf//2]
         #determine cutoffs
         if nterms is None:
             nterms = []
-            for fn,fw in enumerate(filter_half_widths):
-                dpss_vectors = windows.dpss(nf, nf * df * fw, nf)
+            for fn, (fc, fw) in enumerate(zip(filter_centers, filter_half_widths)):
                 if not eigenval_cutoff is None:
-                    smat = np.sinc(2 * fw * (xg-yg)) * 2 * df * fw
-                    eigvals = np.sum((smat @ dpss_vectors.T) * dpss_vectors.T, axis=0)
+                    # Estimate the number of eigenvalues > eigenval_cutoff - Slepian 1978 + Karnik 2020
+                    Nw = 2 * nf * df * fw + 2 / np.pi ** 2 * np.log(4 * nf) * np.log(4 / (eigenval_cutoff[fn] * (1 - eigenval_cutoff[fn])))
+                    dpss_vectors, eigvals = windows.dpss(nf, nf * df * fw, int(min(Nw, nf)), return_ratios=True)
                     nterms.append(np.max(np.where(eigvals>=eigenval_cutoff[fn])))
                 if not edge_suppression is None:
+                    dpss_vectors = windows.dpss(nf, nf * df * fw, nf)
                     z0=fw * df
                     edge_tone=np.exp(-2j*np.pi*np.arange(nf)*z0)
                     fit_components = dpss_vectors * (dpss_vectors @ edge_tone)
@@ -2198,16 +2200,20 @@ def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cu
                     rms_residuals = np.asarray([ np.sqrt(np.mean(np.abs(edge_tone - np.sum(fit_components[:k],axis=0))**2.)) for k in range(nf)])
                     nterms.append(np.max(np.where(rms_residuals>=edge_suppression[fn])))
                 if not avg_suppression is None:
-                    sinc_vector=np.sinc(2 * fw * df * (np.arange(nf)-nf/2.))
+                    dpss_vectors = windows.dpss(nf, nf * df * fw, nf)
+                    sinc_vector = np.sinc(2 * fw * df * (np.arange(nf)-nf/2.))
                     sinc_vector = sinc_vector / np.sqrt(np.mean(sinc_vector**2.))
                     fit_components = dpss_vectors * (dpss_vectors @ sinc_vector)
                     #this is a vector of RMS residuals of vector with equal contributions from all tones within -fw and fw.
                     rms_residuals = np.asarray([ np.sqrt(np.mean(np.abs(sinc_vector - np.sum(fit_components[:k],axis=0))**2.)) for k in range(nf)])
                     nterms.append(np.max(np.where(rms_residuals>=avg_suppression[fn])))
-        #next, construct A matrix.
-        amat = []
-        for fc, fw, nt in zip(filter_centers,filter_half_widths, nterms):
-            amat.append(np.exp(2j * np.pi * (yg[:,:nt]-xc) * fc ) * windows.dpss(nf, nf * df * fw, nt).T )
+
+                amat.append(np.exp(2j * np.pi * (yg[:,:nterms[fn]]-xc) * fc ) * dpss_vectors[:nterms[fn]].T )
+
+        else:
+            for fc, fw, nt in zip(filter_centers, filter_half_widths, nterms):
+                amat.append(np.exp(2j * np.pi * (yg[:,:nt]-xc) * fc ) * windows.dpss(nf, nf * df * fw, nt).T )
+
         if len(amat) > 1:
             amat = np.hstack(amat)
         else:
