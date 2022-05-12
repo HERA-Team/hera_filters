@@ -2,7 +2,7 @@ from .. import dspec
 import numpy as np, random
 import pytest
 from pyuvdata import UVData
-from uvtools.data import DATA_PATH
+from ..data import DATA_PATH
 import os
 import scipy.signal.windows as windows
 import warnings
