@@ -447,7 +447,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                            raise ValueError("filter_dims can either contain 0, 1, or -1.")
                    supported_modes=['clean', 'dft_leastsq', 'dpss_leastsq', 'dft_matrix', 'dpss_matrix', 'dayenu',
                                     'dayenu_dft_leastsq', 'dayenu_dpss_leastsq', 'dayenu_dpss_matrix',
-                                    'dayenu_dft_matrix', 'dayenu_clean']
+                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dft_solve']
                    if not mode in supported_modes:
                        raise ValueError("Need to supply a mode in supported modes:%s"%(str(supported_modes)))
                    mode = mode.split('_')
@@ -1656,7 +1656,6 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     info['basis_options'] = basis_options
     info['amat'] = amat
     info['skipped'] = False
-    wmat = np.diag(w)
     if method == 'leastsq':
         a = np.atleast_2d(w).T * amat
         try:
@@ -1670,6 +1669,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             cn_out = 0.0
             info['skipped'] = True
     elif method == 'matrix':
+        wmat = np.diag(w)
         fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                       filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                       label='fitting matrix', basis=basis)
@@ -1680,6 +1680,18 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         fmat = fit_solution_matrix(wmat, amat, cache=cache, fit_mat_key=fm_key)
         info['fitting_matrix'] = fmat
         cn_out = fmat @ y
+
+    elif method == 'solve':
+        try:
+            A = (amat.T * w) @ amat
+            b = amat.T @ (w * y)
+            cn_out = np.linalg.solve(A, b)
+
+        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+            warn(f"{err} -- recording skipped integration in info and setting to zero.")
+            cn_out = 0.0
+            info['skipped'] = True
+
     else:
         raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix']."%(method))
     model = amat @ (suppression_vector * cn_out)
@@ -2072,8 +2084,6 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
     if cache is None:
         cache = {}
     ndata = weights.shape[0]
-    if not weights.shape[0] == weights.shape[1]:
-        raise ValueError("weights must be a square matrix")
     if not design_matrix.shape[0] == ndata:
         raise ValueError("weights matrix incompatible with design_matrix!")
     if fit_mat_key is None:
@@ -2084,14 +2094,14 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
 
     if not opkey in cache:
         #check condition number
-        cmat = np.conj(design_matrix.T) @ weights @ design_matrix
+        cmat = (np.conj(design_matrix.T) * weights) @ design_matrix
         #should there be a conjugation!?!
         if np.linalg.cond(cmat)>=1e9:
             warn('Warning!!!!: Poorly conditioned matrix! Your linear inpainting IS WRONG!')
-            cache[opkey] = np.linalg.pinv(cmat) @ np.conj(design_matrix.T) @ weights
+            cache[opkey] = np.linalg.pinv(cmat) @ (np.conj(design_matrix.T) * weights)
         else:
             try:
-                cache[opkey] = np.linalg.inv(cmat) @ np.conj(design_matrix.T) @ weights
+                cache[opkey] = np.linalg.inv(cmat) @ (np.conj(design_matrix.T) * weights)
             except np.linalg.LinAlgError as error:
                 print(error)
                 cache[opkey] = None
