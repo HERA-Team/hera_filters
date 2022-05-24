@@ -198,7 +198,7 @@ def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
 def _fourier_filter_hash(filter_centers, filter_half_widths, x, w=None, hash_decimal=10, **kwargs):
     """
     Generate a hash key for a fourier filter
-    
+
     Parameters
     ----------
         filter_centers: list,
@@ -1694,7 +1694,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             info['skipped'] = True
 
     else:
-        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix']."%(method))
+        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
     model = amat @ (suppression_vector * cn_out)
     resid = (y - model) * (~np.isclose(w, 0, atol=1e-10)).astype(float) #suppress flagged residuals (such as RFI)
     return model, resid, info
