@@ -1141,6 +1141,10 @@ def test__fit_basis_1d():
 
     assert np.all(np.isclose((mod2+resid2)*wgts, dw, atol=1e-6))
 
+    # Check failure mode of np.linalg.solve
+    mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5./50.], basis_options=dpss_opts,
+                                    method='solve', basis='dpss')
+
 def test_fit_basis_1d_with_missing_channels():
     fs = np.arange(-50,50)
     #here is some data
