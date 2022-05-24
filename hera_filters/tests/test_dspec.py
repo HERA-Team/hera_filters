@@ -742,7 +742,7 @@ def test_fourier_filter():
                                              mode='clean', **clean_options1)
 
     mdl5, res5, info5 = dspec.fourier_filter(freqs, d, w, [0.], [bl_len], suppression_factors=[0.],
-                                             mode='dpss_matrix', **dpss_options1)
+                                             mode='dpss_solve', **dpss_options1)
 
 
     clean_options_typo = {'tol':1e-9, 'maxiter':100, 'filt2d_mode':'rect',
