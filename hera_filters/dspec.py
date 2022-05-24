@@ -2066,6 +2066,8 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
     if cache is None:
         cache = {}
     ndata = weights.shape[0]
+    if not weights.shape[0] == weights.shape[1]:
+        raise ValueError("weights must be a square matrix")
     if not design_matrix.shape[0] == ndata:
         raise ValueError("weights matrix incompatible with design_matrix!")
     if fit_mat_key is None:
