@@ -3,7 +3,7 @@
 # Licensed under the MIT License
 
 from __future__ import print_function, division, absolute_import
-
+import hashlib
 import numpy as np
 from six.moves import range
 from scipy.signal import windows
@@ -195,38 +195,20 @@ def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     return xout, dout, wout, inserted
 
 
-def _fourier_filter_hash(filter_centers, filter_half_widths,
-                         filter_factors, x, w=None, hash_decimal=10, **kwargs):
-    '''
-    Generate a hash key for a fourier filter
+def _fourier_filter_hash(filter_centers, filter_half_widths, x, w=None, hash_decimal=10, **kwargs):
+    """
+    """
+    hashkey = hashlib.sha1(np.round(np.ascontiguousarray(x), hash_decimal))
+    hashkey.update(np.ascontiguousarray(filter_centers))
+    hashkey.update(np.ascontiguousarray(filter_half_widths))
 
-    Parameters
-    ----------
-        filter_centers: list,
-                        list of floats for filter centers
-        filter_half_widths: list
-                        list of float filter half widths (in fourier space)
-
-        filter_factors: list
-                        list of float filter factors
-        x: the x-axis of the data to be subjected to the hashed filter.
-        w: optional vector of float weights to hash to. default, none
-        hash_decimal: number of decimals to use for floats in key.
-        kwargs: additional hashable elements the user would like to
-                include in their filter key.
-
-    Returns
-    -------
-    A key for fourier_filter arrays hasing the information provided in the args.
-    '''
-    filter_key = ('x:',) + tuple(np.round(x,hash_decimal))\
-    + ('filter_centers x N x DF:',) + tuple(np.round(np.asarray(filter_centers) * np.mean(np.diff(x)) * len(x), hash_decimal))\
-    + ('filter_half_widths x N x DF:',) + tuple(np.round(np.asarray(filter_half_widths) * np.mean(np.diff(x)) * len(x), hash_decimal))\
-    + ('filter_factors x 1e9:',) + tuple(np.round(np.asarray(filter_factors) * 1e9, hash_decimal))
     if w is not None:
-        filter_key = filter_key + ('weights', ) +  tuple(np.round(w.tolist(), hash_decimal))
-    filter_key = filter_key + tuple([kwargs[k] for k in kwargs])
-    return filter_key
+        hashkey.update(np.round(np.ascontiguousarray(w), hash_decimal))
+
+    for k in kwargs:
+        hashkey.update(np.ascontiguousarray(kwargs[k]))
+
+    return (hashkey.hexdigest(),)
 
 def calc_width(filter_size, real_delta, nsamples):
     '''Calculate the upper and lower bin indices of a fourier filter
@@ -1683,8 +1665,8 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
 
     elif method == 'solve':
         try:
-            A = (amat.T * w) @ amat
-            b = amat.T @ (w * y)
+            A = (np.conj(amat).T * w) @ amat
+            b = np.conj(amat).T @ (w * y)
             cn_out = np.linalg.solve(A, b)
 
         except (np.linalg.LinAlgError, ValueError, TypeError) as err:
@@ -2094,14 +2076,14 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
 
     if not opkey in cache:
         #check condition number
-        cmat = (np.conj(design_matrix.T) * weights) @ design_matrix
+        cmat = np.conj(design_matrix.T) @ weights @ design_matrix
         #should there be a conjugation!?!
         if np.linalg.cond(cmat)>=1e9:
             warn('Warning!!!!: Poorly conditioned matrix! Your linear inpainting IS WRONG!')
-            cache[opkey] = np.linalg.pinv(cmat) @ (np.conj(design_matrix.T) * weights)
+            cache[opkey] = np.linalg.pinv(cmat) @ np.conj(design_matrix.T) @ weights
         else:
             try:
-                cache[opkey] = np.linalg.inv(cmat) @ (np.conj(design_matrix.T) * weights)
+                cache[opkey] = np.linalg.inv(cmat) @ np.conj(design_matrix.T) @ weights
             except np.linalg.LinAlgError as error:
                 print(error)
                 cache[opkey] = None

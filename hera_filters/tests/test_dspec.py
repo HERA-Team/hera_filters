@@ -741,6 +741,9 @@ def test_fourier_filter():
     mdl4, res4, info4 = dspec.fourier_filter(freqs, d, w, [0.], [bl_len],
                                              mode='clean', **clean_options1)
 
+    mdl5, res5, info5 = dspec.fourier_filter(freqs, d, w, [0.], [bl_len], suppression_factors=[0.],
+                                             mode='dpss_matrix', **dpss_options1)
+
 
     clean_options_typo = {'tol':1e-9, 'maxiter':100, 'filt2d_mode':'rect',
                     'edgecut_low':0, 'edgecut_hi':0, 'add_clean_residual':False,
@@ -751,6 +754,8 @@ def test_fourier_filter():
 
     assert np.all(np.isclose(mdl3, mdl4, atol=1e-6))
     assert np.all(np.isclose(res3, res4, atol=1e-6))
+    assert np.all(np.isclose(mdl1, mdl5, atol=1e-6))
+    assert np.all(np.isclose(res1, res5, atol=1e-6))
 
     assert np.all(np.isclose(mdl1, mdl2, atol=1e-6))
     assert np.all(np.isclose(res1, res2))
