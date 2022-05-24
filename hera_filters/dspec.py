@@ -197,6 +197,25 @@ def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
 
 def _fourier_filter_hash(filter_centers, filter_half_widths, x, w=None, hash_decimal=10, **kwargs):
     """
+    Generate a hash key for a fourier filter
+    
+    Parameters
+    ----------
+        filter_centers: list,
+                        list of floats for filter centers
+        filter_half_widths: list
+                        list of float filter half widths (in fourier space)
+        filter_factors: list
+                        list of float filter factors
+        x: the x-axis of the data to be subjected to the hashed filter.
+        w: optional vector of float weights to hash to. default, none
+        hash_decimal: number of decimals to use for floats in key.
+        kwargs: additional hashable elements the user would like to
+                include in their filter key.
+
+    Returns
+    -------
+    A key for fourier_filter arrays hasing the information provided in the args.
     """
     hashkey = hashlib.sha1(np.round(np.ascontiguousarray(x), hash_decimal))
     hashkey.update(np.ascontiguousarray(filter_centers))
