@@ -1843,6 +1843,167 @@ def _clean_filter(x, data, wgts, filter_centers, filter_half_widths,
         residual *= (~np.isclose(wgts * windmat, 0.0, atol=1e-10)).astype(float)
     return model, residual, info
 
+def _fit_basis_simultaneous(x, data, wgts, filter_centers, filter_half_widths, basis_options
+                            suppression_factors=None, method='matrix', basis='dpss', cache=None,
+                            filter_dims=[(0, 1)], skip_wgts=0.1):
+    """
+    A linear-least-squares fitting function for computing models and residuals on both axes simultaneously.
+    Fitting is in the of the form
+        y_model = A @ c
+    where A is a design matrix encoding our choice for a basis functions and y_model
+
+    Parameters
+    ----------
+    x: 2-tuple/2-list
+        axes of data to fit.
+    data: array-like
+        data to fit, should be an Ntimes x Nfreqs array.
+    wgts: array-like
+        data weights.
+    filter_centers': array-like
+        list of floats specifying the centers of fourier windows with which to fit signals
+    filter_half_widths': array-like
+        list of floats specifying the half-widths of fourier windows to model.
+    suppression_factors: array-like, optional
+        list of floats for each basis function denoting the fraction of
+        of each basis element that should be present in the fitted model
+        If none provided, model will include 100% of each mode.
+        It is sometimes useful, for renormalization reversability
+        to only include 1-\epsilon where \epsilon is a small number of
+        each mode in the model.
+    basis_options: dictionary
+        basis specific options for fitting. The two bases currently supported are dft and dpss whose options
+        are as follows:
+            * 'dft':
+              *'fundamental_period': float or 2-list/tuple
+                The fundamental_period of dft modes to fit. This is the
+                Fourier resoltion of fitted fourier modes equal to
+                1/FP where FP is the fundamental period. For a standard
+                delay DFT FP = B where B is the visibility bandwidth
+                FP also sets the number of
+                modes fit within each window in 'filter_half_widths' will
+                equal fw / fundamental_period where fw is the filter width.
+                if filter2d, must provide a 2-tuple with fundamental_period
+                of each dimension.
+            * 'dpss':
+                The basis_options must include one and only one of the four options
+                for specifying how to terminate the dpss series in each filter window.
+                *'eigenval_cutoff': array-like
+                    list of sinc_matrix eigenvalue cutoffs to use for included dpss modes.
+                    if 2d fit, should be a 2-list with each element giving list
+                    of eigenval cutoffs for each dimension.
+                *'nterms': array-like
+                    list of integers specifying the order of the dpss sequence to use in each
+                    filter window. if 2d fit, should be a 2-list of lists of nterms for each delay
+                    window in each dimension.
+                *'edge_supression': array-like
+                    specifies the degree of supression that must occur to tones at the filter edges
+                    to calculate the number of DPSS terms to fit in each sub-window.
+                    if 2d fit, should be a 2-list of lists of edge_suppression thresholds in each dim
+                *'avg_suppression': list of floats, optional
+                    specifies the average degree of suppression of tones inside of the filter edges
+                    to calculate the number of DPSS terms. Similar to edge_supression but instead checks
+                    the suppression of a since vector with equal contributions from all tones inside of the
+                    filter width instead of a single tone.
+                    if 2d fit, should be a list of lists of avg_suppression thressholds for each.
+    method: string
+        specifies the fitting method to use. We currently support in 2d simultaneous filtering mode.
+            *'solve' derivate model using np.linalg.solve linear solver
+            *'matrix' derive model by directly calculate the fitting matrix
+                [A^T W A]^{-1} A^T W and applying it to the y vector.
+    filter_dim, int optional
+        specify dimension to filter. default 1,
+        and if 2d filter, will use both dimensions.
+    skip_wgt: skips filtering rows with very low total weight (unflagged fraction ~< skip_wgt).
+        Model is left as 0s, residual is left as data, and info is {'skipped': True} for that
+        time. Only works properly when all weights are all between 0 and 1.
+    max_contiguous_edge_flags : int, optional
+        if the number of contiguous samples at the edge is greater then this
+        at either side, skip .
+    zero_residual_flags : bool, optional.
+        If true, set flagged channels in the residual equal to zero.
+        Default is True.
+    Returns
+    -------
+        model: array-like
+            Ndata array of complex floats equal to interpolated model
+        resid: array-like
+            Ndata array of complex floats equal to y - model
+    info: dictionary with filtering parameters and a list of skipped_times and skipped_channels
+          has the following fields
+         * 'status': dict holding two sub-dicts status of filtering on each time/frequency step.
+                   - 'axis_0'/'axis_1': dict holding the status of time filtering for each time/freq step. Keys are integer index
+                               of each step and values are a string that is either 'success' or 'skipped'.
+         * 'filter_params': dict holding the filtering parameters for each axis with the following sub-dicts.
+                   - 'axis_0'/'axis_1': dict holding filtering parameters for filtering over each respective axis.
+                               - 'filter_centers': centers of filtering windows.
+                               - 'filter_half_widths': half-widths of filtering regions for each axis.
+                               - 'suppression_factors': amount of suppression for each filtering region.
+                               - 'x': vector of x-values used to generate the filter.
+                               - 'basis': (if using dpss/dft) gives the filtering basis.
+                               - 'basis_options': the basis options used for dpss/dft mode. See dft_operator and dpss_operator for
+                                                  more details.
+    """
+    if cache is None:
+        cache = {}
+    info = copy.deepcopy(basis_options)
+    if basis.lower() == 'dft':
+        X = dft_operator(x[0], filter_centers=filter_centers[0],
+                            filter_half_widths=filter_half_widths[0],
+                            cache=cache, **basis_options)
+        Y = dft_operator(x[1], filter_centers=filter_centers[1],
+                            filter_half_widths=filter_half_widths[1],
+                            cache=cache, **basis_options)
+    elif basis.lower() == 'dpss':
+        X, nterms0 = dpss_operator(x[0], filter_centers=filter_centers[0],
+                                     filter_half_widths=filter_half_widths[0],
+                                     cache=cache, **basis_options)
+        Y, nterms1 = dpss_operator(x[1], filter_centers=filter_centers[1],
+                                     filter_half_widths=filter_half_widths[1],
+                                     cache=cache, **basis_options)
+        info['nterms'] = (nterms0, nterms1)
+    else:
+        raise ValueError("Specify a fitting basis in supported bases: ['dft', 'dpss']")
+    assert method.lower() in ['matrix', 'solve'], f'Method {method} is currently not supported for simultaneous 2d filtering'
+    if suppression_factors is None:
+        suppression_vector = np.ones(amat.shape[1])
+    else:
+        if basis.lower() == 'dft':
+            suppression_vector =  np.hstack([1-sf * np.ones(2*int(np.ceil(fw * basis_options['fundamental_period'])))\
+                                             for sf,fw in zip(suppression_factors, filter_half_widths)])
+        elif basis.lower() == 'dpss':
+            suppression_vector = np.hstack([1-sf * np.ones(nterm) for sf, nterm in zip(suppression_factors, nterms)])
+
+    # Generate hash-key for filters
+    key = _fourier_filter_hash(filter_centers, filter_half_widths, x=x[0], w=wgts, t=x[1],
+                               filter_factors=suppression_vectors)
+
+    if key not in cache:
+        # Use einsum to calculate (X^T W X) in a memory efficient way
+        wgts = wgts.astype(X.dtype)
+        XTX = np.einsum("ji,lk,jl,jm,ln->ikmn", np.conj(X), np.conj(Y), wgts, X, Y, optimize=True)
+        ncomps = X.shape[1] * Y.shape[1]
+        XTX = np.reshape(XTX, (ncomps, ncomps))
+
+        if method == 'solve':
+            cache[key] = XTX
+        elif method == 'matrix':
+            cache[key] = np.linalg.pinv(XTX)
+
+    else:
+        XTX = cache[key]
+
+    # Calculate X^T W y using the property (A \otimes B) vec(y) = (A Y B)
+    XTWy = np.ravel(np.conj(np.transpose(X)) @ (data * wgts) @ np.conj(Y))
+
+    # Calculate beta
+    if method == 'solve':
+        cn_out = np.reshape(np.linalg.solve(XTX, XTWy), (X.shape[1], Y.shape[1]))
+    else method == 'matrix':
+        cn_out = np.reshape(XTX @ XTWY, (X.shape[1], Y.shape[1]))
+
+    # Produce an estimate of the filtered gains
+    filtered = X @ cn_out @ np.transpose(Y)
 
 
 
