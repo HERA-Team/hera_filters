@@ -298,6 +298,8 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                         'clean', iterative clean
                         'dpss_leastsq', dpss fitting using scipy.optimize.lsq_linear
                         'dft_leastsq', dft fitting using scipy.optimize.lsq_linear
+                        'dpss_solve', dpss fitting using np.linalg.solve
+                        'dft_solve', dft fitting using np.linalg.solve
                         'dpss_matrix', dpss fitting using direct lin-lsq matrix
                                        computation. Slower then lsq but provides linear
                                        operator that can be used to propagate
@@ -1601,6 +1603,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                     filter width instead of a single tone.
     method: string
         specifies the fitting method to use. We currently support.
+            *'solve' derive model using np.linalg.solve
             *'leastsq' to perform iterative leastsquares fit to derive model.
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
@@ -1927,6 +1930,7 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                     if 2d fit, should be a list of lists of avg_suppression thressholds for each.
     method: string
         specifies the fitting method to use. We currently support.
+            *'solve' derive model using np.linalg.solve
             *'leastsq' to perform iterative leastsquares fit to derive model.
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
@@ -2066,7 +2070,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
     ----------
     weights: array-like
         ndata x ndata matrix of data weights
-    design_matrx: array-like
+    design_matrix: array-like
         ndata x n_fit_params matrix transforming fit_parameters to data
     cache: optional dictionary
         optional dictionary storing pre-computed fitting matrix.
