@@ -1,4 +1,4 @@
-name: uvtools
+name: hera_filters
 channels:
   - conda-forge
   - defaults

@@ -1,0 +1,4 @@
+include *.md
+include LICENSE
+include hera_filters/VERSION
+include hera_filters/GIT_INFO
