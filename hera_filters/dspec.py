@@ -172,7 +172,8 @@ def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
         inserted = np.zeros(len(x), dtype=bool)
         return xout, dout, wout, inserted
     # next, check that the array is not on a grid and if it isn't, return x, y, w
-    if not np.allclose(xdiff / dx, np.round(xdiff / dx), rtol=0.0, atol=np.abs(xtol * dx)):
+    # should actually do relative comparision!
+    if not np.allclose(xdiff / dx, np.round(xdiff / dx), rtol=0.0, atol=np.abs(xtol)):
         xout = x
         dout = data
         wout = weights
