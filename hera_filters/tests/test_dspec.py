@@ -741,6 +741,9 @@ def test_fourier_filter():
     mdl4, res4, info4 = dspec.fourier_filter(freqs, d, w, [0.], [bl_len],
                                              mode='clean', **clean_options1)
 
+    mdl5, res5, info5 = dspec.fourier_filter(freqs, d, w, [0.], [bl_len], suppression_factors=[0.],
+                                             mode='dpss_solve', **dpss_options1)
+
 
     clean_options_typo = {'tol':1e-9, 'maxiter':100, 'filt2d_mode':'rect',
                     'edgecut_low':0, 'edgecut_hi':0, 'add_clean_residual':False,
@@ -751,6 +754,8 @@ def test_fourier_filter():
 
     assert np.all(np.isclose(mdl3, mdl4, atol=1e-6))
     assert np.all(np.isclose(res3, res4, atol=1e-6))
+    assert np.all(np.isclose(mdl1, mdl5, atol=1e-6))
+    assert np.all(np.isclose(res1, res5, atol=1e-6))
 
     assert np.all(np.isclose(mdl1, mdl2, atol=1e-6))
     assert np.all(np.isclose(res1, res2))
@@ -1135,6 +1140,20 @@ def test__fit_basis_1d():
     assert np.all(np.isclose(mod3, mod4, atol=1e-2))
 
     assert np.all(np.isclose((mod2+resid2)*wgts, dw, atol=1e-6))
+
+    # Check failure mode of np.linalg.solve
+    mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5./50.], basis_options=dpss_opts,
+                                    method='solve', basis='dpss')
+    assert info1['skipped']
+
+    # Check errors
+    with pytest.raises(ValueError):
+        mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='undefined', basis='dpss')
+
+    with pytest.raises(ValueError):
+        mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='undefined')
 
 def test_fit_basis_1d_with_missing_channels():
     fs = np.arange(-50,50)
