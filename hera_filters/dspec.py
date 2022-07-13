@@ -3,7 +3,7 @@
 # Licensed under the MIT License
 
 from __future__ import print_function, division, absolute_import
-
+import hashlib
 import numpy as np
 from six.moves import range
 from scipy.signal import windows
@@ -196,9 +196,8 @@ def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     return xout, dout, wout, inserted
 
 
-def _fourier_filter_hash(filter_centers, filter_half_widths,
-                         filter_factors, x, w=None, hash_decimal=10, **kwargs):
-    '''
+def _fourier_filter_hash(filter_centers, filter_half_widths, x, w=None, hash_decimal=10, **kwargs):
+    """
     Generate a hash key for a fourier filter
 
     Parameters
@@ -207,7 +206,6 @@ def _fourier_filter_hash(filter_centers, filter_half_widths,
                         list of floats for filter centers
         filter_half_widths: list
                         list of float filter half widths (in fourier space)
-
         filter_factors: list
                         list of float filter factors
         x: the x-axis of the data to be subjected to the hashed filter.
@@ -219,15 +217,18 @@ def _fourier_filter_hash(filter_centers, filter_half_widths,
     Returns
     -------
     A key for fourier_filter arrays hasing the information provided in the args.
-    '''
-    filter_key = ('x:',) + tuple(np.round(x,hash_decimal))\
-    + ('filter_centers x N x DF:',) + tuple(np.round(np.asarray(filter_centers) * np.mean(np.diff(x)) * len(x), hash_decimal))\
-    + ('filter_half_widths x N x DF:',) + tuple(np.round(np.asarray(filter_half_widths) * np.mean(np.diff(x)) * len(x), hash_decimal))\
-    + ('filter_factors x 1e9:',) + tuple(np.round(np.asarray(filter_factors) * 1e9, hash_decimal))
+    """
+    hashkey = hashlib.sha1(np.round(np.ascontiguousarray(x), hash_decimal))
+    hashkey.update(np.ascontiguousarray(filter_centers))
+    hashkey.update(np.ascontiguousarray(filter_half_widths))
+
     if w is not None:
-        filter_key = filter_key + ('weights', ) +  tuple(np.round(w.tolist(), hash_decimal))
-    filter_key = filter_key + tuple([kwargs[k] for k in kwargs])
-    return filter_key
+        hashkey.update(np.round(np.ascontiguousarray(w), hash_decimal))
+
+    for k in kwargs:
+        hashkey.update(np.ascontiguousarray(kwargs[k]))
+
+    return (hashkey.hexdigest(),)
 
 def calc_width(filter_size, real_delta, nsamples):
     '''Calculate the upper and lower bin indices of a fourier filter
@@ -298,6 +299,8 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                         'clean', iterative clean
                         'dpss_leastsq', dpss fitting using scipy.optimize.lsq_linear
                         'dft_leastsq', dft fitting using scipy.optimize.lsq_linear
+                        'dpss_solve', dpss fitting using np.linalg.solve
+                        'dft_solve', dft fitting using np.linalg.solve
                         'dpss_matrix', dpss fitting using direct lin-lsq matrix
                                        computation. Slower then lsq but provides linear
                                        operator that can be used to propagate
@@ -448,7 +451,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                            raise ValueError("filter_dims can either contain 0, 1, or -1.")
                    supported_modes=['clean', 'dft_leastsq', 'dpss_leastsq', 'dft_matrix', 'dpss_matrix', 'dayenu',
                                     'dayenu_dft_leastsq', 'dayenu_dpss_leastsq', 'dayenu_dpss_matrix',
-                                    'dayenu_dft_matrix', 'dayenu_clean']
+                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dft_solve']
                    if not mode in supported_modes:
                        raise ValueError("Need to supply a mode in supported modes:%s"%(str(supported_modes)))
                    mode = mode.split('_')
@@ -1601,6 +1604,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                     filter width instead of a single tone.
     method: string
         specifies the fitting method to use. We currently support.
+            *'solve' derive model using np.linalg.solve
             *'leastsq' to perform iterative leastsquares fit to derive model.
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
@@ -1657,7 +1661,6 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     info['basis_options'] = basis_options
     info['amat'] = amat
     info['skipped'] = False
-    wmat = np.diag(w)
     if method == 'leastsq':
         a = np.atleast_2d(w).T * amat
         try:
@@ -1671,6 +1674,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             cn_out = 0.0
             info['skipped'] = True
     elif method == 'matrix':
+        wmat = np.diag(w)
         fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                       filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                       label='fitting matrix', basis=basis)
@@ -1681,8 +1685,20 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         fmat = fit_solution_matrix(wmat, amat, cache=cache, fit_mat_key=fm_key)
         info['fitting_matrix'] = fmat
         cn_out = fmat @ y
+
+    elif method == 'solve':
+        try:
+            A = (np.conj(amat).T * w) @ amat
+            b = np.conj(amat).T @ (w * y)
+            cn_out = np.linalg.solve(A, b)
+
+        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+            warn(f"{err} -- recording skipped integration in info and setting to zero.")
+            cn_out = 0.0
+            info['skipped'] = True
+
     else:
-        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix']."%(method))
+        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
     model = amat @ (suppression_vector * cn_out)
     resid = (y - model) * (~np.isclose(w, 0, atol=1e-10)).astype(float) #suppress flagged residuals (such as RFI)
     return model, resid, info
@@ -1915,6 +1931,7 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                     if 2d fit, should be a list of lists of avg_suppression thressholds for each.
     method: string
         specifies the fitting method to use. We currently support.
+            *'solve' derive model using np.linalg.solve
             *'leastsq' to perform iterative leastsquares fit to derive model.
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
@@ -2054,7 +2071,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
     ----------
     weights: array-like
         ndata x ndata matrix of data weights
-    design_matrx: array-like
+    design_matrix: array-like
         ndata x n_fit_params matrix transforming fit_parameters to data
     cache: optional dictionary
         optional dictionary storing pre-computed fitting matrix.
