@@ -273,14 +273,18 @@ def test_fit_solution_matrix():
     wmat = np.diag(wgts)
     fitmat_dft = dspec.fit_solution_matrix(wmat, amat_dft)
     fitmat_dpss = dspec.fit_solution_matrix(wmat, amat_dpss)
+    fitmat_dpss_diag = dspec.fit_solution_matrix(wgts, amat_dpss)
     interp_dft = amat_dft @ fitmat_dft @ dw
     interp_dpss = amat_dpss @ fitmat_dpss @ dw
+    interp_dpss_diag = amat_dpss @ fitmat_dpss_diag @ dw
     #DFT interpolation is meh, so we keep our standards low.
     #DFT interpolation matrices are poorly conditioned so that's also
     #Downer.
     assert np.all(np.isclose(interp_dft, data, atol=1e-2))
     #DPSS interpolation is clutch. We can make our standards high.
     assert np.all(np.isclose(interp_dpss, data, atol=1e-6))
+    # DPSS interpolation using diagonal wgts grid
+    assert np.all(np.isclose(interp_dpss_diag, data, atol=1e-6))
     #Check Raising of ValueErrors.
     amat_dft_pc = dspec.dft_operator(fs, [0.], [4. / 50.], fundamental_period=200.)
     with warnings.catch_warnings(record=True) as w:
