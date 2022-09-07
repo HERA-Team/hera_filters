@@ -263,7 +263,7 @@ def test_pswf_operator():
     #check that all columns of matrices obtained with different methods
     #of cutoff are identical.
     for m in range(ncolmin):
-        np.testing.assert_allclose(amat1[:,m], amat2[:,m])
+        np.testing.assert_allclose(np.abs(amat1[:,m]), np.abs(amat2[:,m]))
     # Compute partial pswf w/ xmin and xmax
     amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9], xmin=freqs.min() / 2, xmax=freqs.max() * 2)
 

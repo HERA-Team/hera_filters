@@ -2314,18 +2314,6 @@ def pswf_operator(
                 pswf_vectors = pswf_vectors[:, :nt]
                 _nterms.append(nt)
 
-            # By convention (Percival and Walden, 1993 pg 379)
-            # symmetric tapers (k=0,2,4,...) should have a positive average.
-            fix_even = (pswf_vectors[:, ::2].sum(axis=0) < 0)
-            for i, f in enumerate(fix_even):
-                if f:
-                    pswf_vectors[:, 2 * i] *= -1
-            # Antisymmetric tapers should begin with a positive lobe
-            thresh = max(1e-7, 1. / pswf_vectors.shape[0])
-            for i, w in enumerate(pswf_vectors[:, 1::2].T):
-                if w[w * w > thresh][0] < 0:
-                    pswf_vectors[:, 2 * i + 1] *= -1
-
             # Apply filter center to design matrix
             amat.append(
                 pswf_vectors
