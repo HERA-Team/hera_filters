@@ -1674,7 +1674,6 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             cn_out = 0.0
             info['skipped'] = True
     elif method == 'matrix':
-        wmat = np.diag(w)
         fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                       filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                       label='fitting matrix', basis=basis)
@@ -1682,7 +1681,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             fm_key = fm_key + (basis_options['fundamental_period'], )
         elif basis.lower() == 'dpss':
             fm_key = fm_key + tuple(nterms)
-        fmat = fit_solution_matrix(wmat, amat, cache=cache, fit_mat_key=fm_key)
+        fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key)
         info['fitting_matrix'] = fmat
         cn_out = fmat @ y
 
@@ -2070,7 +2069,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
     Parameters
     ----------
     weights: array-like
-        ndata x ndata matrix of data weights
+        ndata x ndata or (ndata if diagonal) matrix of data weights
     design_matrix: array-like
         ndata x n_fit_params matrix transforming fit_parameters to data
     cache: optional dictionary
@@ -2090,7 +2089,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
     if cache is None:
         cache = {}
     ndata = weights.shape[0]
-    if not weights.shape[0] == weights.shape[1]:
+    if weights.ndim == 2 and not weights.shape[0] == weights.shape[1]:
         raise ValueError("weights must be a square matrix")
     if not design_matrix.shape[0] == ndata:
         raise ValueError("weights matrix incompatible with design_matrix!")
@@ -2102,14 +2101,20 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
 
     if not opkey in cache:
         #check condition number
-        cmat = np.conj(design_matrix.T) @ weights @ design_matrix
+        if weights.ndim == 1:
+            xwmat = np.conj(design_matrix.T) * weights
+            cmat = xwmat @ design_matrix
+        else:
+            xwmat = np.conj(design_matrix.T) @ weights
+            cmat = xwmat @ design_matrix
+            
         #should there be a conjugation!?!
         if np.linalg.cond(cmat)>=1e9:
             warn('Warning!!!!: Poorly conditioned matrix! Your linear inpainting IS WRONG!')
-            cache[opkey] = np.linalg.pinv(cmat) @ np.conj(design_matrix.T) @ weights
+            cache[opkey] = np.linalg.pinv(cmat) @ xwmat
         else:
             try:
-                cache[opkey] = np.linalg.inv(cmat) @ np.conj(design_matrix.T) @ weights
+                cache[opkey] = np.linalg.inv(cmat) @ xwmat
             except np.linalg.LinAlgError as error:
                 print(error)
                 cache[opkey] = None
