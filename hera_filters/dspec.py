@@ -2199,7 +2199,7 @@ def pswf_operator(
     Calculates PSWF operator with multiple delay windows to fit data. Frequencies
     do not need to be equally spaced (unlike DPSS operator). Users can specify how the
     PSWF series fits are cutoff in each delay-filtering window with one (and only one)
-    of two conditions: eigenvalues in sinc matrix fall below a thresshold (eigenval_cutoff) or
+    of two conditions: approximated eigenvalues of the sinc function fall below a thresshold (eigenval_cutoff) or
     user specified number of PSWF terms (nterms). 
 
     Paper for algorithm used to compute the prolate spheroidal wave functions can be
