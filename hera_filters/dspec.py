@@ -2122,6 +2122,12 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
 
 def _calculate_amat(k, c):
     """
+    Computes the eigenvalues and eigenvectors of the decay coefficient matrix
+    used to compute prolate spheroidal wave functions. More information can be
+    found in the following paper: 
+        
+        https://www.sciencedirect.com/science/article/pii/S106352030400017X
+
     Parameters:
     ----------
         k : int
@@ -2154,7 +2160,9 @@ def _calculate_amat(k, c):
 def _normalized_legendre(x, kmax):
     """
     Fast computation of the first kmax normalized Legendre polynomials evaluated at points
-    x using the recurrence relation.
+    x using the Bonnet's recurrence relation. More information can be found here:
+
+    https://en.wikipedia.org/wiki/Legendre_polynomials#Recurrence_relations
 
     Parameters:
     ----------
@@ -2192,24 +2200,29 @@ def pswf_operator(
     do not need to be equally spaced (unlike DPSS operator). Users can specify how the
     PSWF series fits are cutoff in each delay-filtering window with one (and only one)
     of two conditions: eigenvalues in sinc matrix fall below a thresshold (eigenval_cutoff) or
-    user specified number of PSWF terms (nterms).
+    user specified number of PSWF terms (nterms). 
+
+    Paper for algorithm used to compute the prolate spheroidal wave functions can be
+    found here:
+
+        https://www.sciencedirect.com/science/article/pii/S106352030400017X
 
     Parameters
     ----------
     x: array-like
         x values to evaluate operator at
     filter_centers: array-like
-        list of floats of centers of delay filter windows in nanosec
+        list of floats of centers of delay filter windows in units of 1/units of x
     filter_half_widths: array-like
-        list of floats of half-widths of delay filter windows in nanosec
+        list of floats of half-widths of delay filter windows in units of 1/units of x
     cache: dictionary, optional
         dictionary for storing operator matrices with keys
         tuple(x) + tuple(filter_centers) + tuple(filter_half_widths)\
          + (series_cutoff_name,) = tuple(series_cutoff_values)
     eigenval_cutoff: list of floats, optional
-        list of sinc matrix eigenvalue cutoffs to use for included dpss modes.
+        list of sinc matrix eigenvalue cutoffs to use for included pswf modes.
     nterms: list of integers, optional
-        integer specifying number of dpss terms to include in each delay fitting block.
+        integer specifying number of pswf terms to include in each delay fitting block.
     xmin: float, optional
         Lower bound of the frequency range. If not given, will be calculate from x
     xmax: float, optional
@@ -2222,8 +2235,8 @@ def pswf_operator(
     ----------
     2-tuple
     First element:
-        Design matrix for DPSS fitting.   Ndata x (Nfilter_window * nterm)
-        transforming from DPSS modes to data.
+        Design matrix for PSWF fitting.   Ndata x (Nfilter_window * nterm)
+        transforming from PSWF modes to data.
     Second element:
         list of integers with number of terms for each fourier window specified by filter_centers
         and filter_half_widths

@@ -253,8 +253,8 @@ def test_pswf_operator():
     NF = 100
     DF = 100e3
     freqs = np.arange(-NF/2, NF/2)*DF + 150e6
-    pytest.raises(ValueError, dspec.dpss_operator, x=freqs, filter_centers=[0.], filter_half_widths=[1e-6], nterms=[5], eigenval_cutoff=[1e-9])
-    #now calculate DPSS operator matrices using different cutoff criteria. The columns
+    pytest.raises(ValueError, dspec.pswf_operator, x=freqs, filter_centers=[0.], filter_half_widths=[1e-6], nterms=[5], eigenval_cutoff=[1e-9])
+    #now calculate PSWF operator matrices using different cutoff criteria. The columns
     #should be the same up to the minimum number of columns of the three techniques.
     amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9])
     amat2, ncol2 = dspec.pswf_operator(freqs, [0.], [100e-9], nterms=[50])
@@ -264,8 +264,13 @@ def test_pswf_operator():
     #of cutoff are identical.
     for m in range(ncolmin):
         np.testing.assert_allclose(np.abs(amat1[:,m]), np.abs(amat2[:,m]))
+    # Compute partial pswf w/ xmin and xmax and show it gives more terms than amat1
+    amat3, ncol3 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9], xmin=freqs.min() / 2, xmax=freqs.max() * 2)
+    assert sum(ncol3) > sum(ncol1)
     # Compute partial pswf w/ xmin and xmax
-    amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9], xmin=freqs.min() / 2, xmax=freqs.max() * 2)
+    amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9])
+    amat2, ncol2 = dspec.pswf_operator(freqs, [0., 100e-9], [100e-9, 100e-9], eigenval_cutoff=[1e-9, 1e-9])
+    assert sum(ncol2) == 2 * sum(ncol1)
 
 def test_dpss_operator():
     #test that an error is thrown when we specify more then one
