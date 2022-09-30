@@ -2270,23 +2270,13 @@ def pswf_operator(
         xg = np.copy(x)
         xg = 2 * (xg - xmin) / (xmax - xmin) - 1
 
-        # Compute number of polynomials needed
-        if nterms is not None:
-            kmax = np.max(nterms)
-        else:
-            nwindows = []
-            for eigval, fw in zip(eigenval_cutoff, filter_half_widths):
-                c = fw * np.pi * (xmax - xmin)
-                nw = (
-                    2 * (xmax - xmin) * fw
-                    + 2
-                    / np.pi ** 2
-                    * np.log(100 * c / np.pi + 25)
-                    * np.log(5 / (eigval * (1 - eigval)))
-                    + 7
-                )
-                nwindows.append(nw)
-            kmax = np.round(np.max(nw)).astype(int)
+        # Estimate the number of polynomials needed
+        nwindows = []
+        for fw in filter_half_widths:
+            c = fw * np.pi * (xmax - xmin)
+            nw = 2 * c + 1
+            nwindows.append(nw)
+        kmax = np.round(np.min([np.max(nwindows), xg.shape[0]])).astype(int)
 
         # Compute associated Legendre polynomials
         polynomials = _normalized_legendre(xg, kmax)
