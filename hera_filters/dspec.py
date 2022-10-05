@@ -10,6 +10,7 @@ from scipy.signal import windows
 from warnings import warn
 from scipy.optimize import leastsq, lsq_linear
 import copy
+from scipy import linalg
 
 #DEFAULT PARAMETERS FOR CLEANs
 CLEAN_DEFAULTS_1D={'tol':1e-9, 'window':'none',
@@ -451,7 +452,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                            raise ValueError("filter_dims can either contain 0, 1, or -1.")
                    supported_modes=['clean', 'dft_leastsq', 'dpss_leastsq', 'dft_matrix', 'dpss_matrix', 'dayenu',
                                     'dayenu_dft_leastsq', 'dayenu_dpss_leastsq', 'dayenu_dpss_matrix',
-                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dft_solve']
+                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dft_solve', 'dpss_cholesky']
                    if not mode in supported_modes:
                        raise ValueError("Need to supply a mode in supported modes:%s"%(str(supported_modes)))
                    mode = mode.split('_')
@@ -1696,8 +1697,39 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             cn_out = 0.0
             info['skipped'] = True
 
+    elif method == 'cholesky':
+        fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                      filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                      label='fitting matrix', basis=basis, mode='cholesky')
+        square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                      filter_factors=suppression_vector, x=x, hash_decimal=hash_decimal,
+                                      label='covariance', basis=basis)
+        mask = w.astype(bool)
+        flags = np.logical_not(mask)
+        try:
+            if square_key in cache:
+                covmat = cache[square_key]
+            else:
+                covmat = np.dot(np.conj(amat).T, amat)
+                cache[square_key] = covmat
+
+            if fm_key in cache:
+                L = cache[fm_key]
+            else:
+                XTX = covmat - np.conj(amat[flags]).T @ amat[flags] + np.eye(covmat.shape[0]) * 1e-12
+                L = linalg.lu_factor(XTX)
+                cache[fm_key] = L
+
+            Xy = np.conj(amat[mask]).T @ y[mask]
+            cn_out = linalg.lu_solve(L, Xy)
+
+        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+            warn(f"{err} -- recording skipped integration in info and setting to zero.")
+            cn_out = 0.0
+            info['skipped'] = True
+
     else:
-        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
+        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
     model = amat @ (suppression_vector * cn_out)
     resid = (y - model) * (~np.isclose(w, 0, atol=1e-10)).astype(float) #suppress flagged residuals (such as RFI)
     return model, resid, info
