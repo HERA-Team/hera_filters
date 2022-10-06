@@ -110,6 +110,13 @@ def _get_filter_area(x, filter_center, filter_width):
 
 def _are_wgts_binary(wgts):
     """
+    Returns whether or not a weights array can be cast as as boolean mask
+
+    Arguments:
+        wgts : array-like vector containing floats
+    
+    Returns:
+        Value of True if wgts contains only 1's and 0's
     """
     binary_total = np.sum(np.isclose(wgts, 0) + np.isclose(wgts, 1))
     return binary_total == np.prod(wgts.shape)
@@ -304,9 +311,15 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                         specify filtering mode. Currently supported are
                         'clean', iterative clean
                         'dpss_leastsq', dpss fitting using scipy.optimize.lsq_linear
-                        'dft_leastsq', dft fitting using scipy.optimize.lsq_linear
-                        'dpss_solve', dpss fitting using np.linalg.solve
-                        'dft_solve', dft fitting using np.linalg.solve
+                        'dft_leastsq', dft fitting using scipy.optimize.lsq_linear. Comparable in
+                                      speed to leastsq in many cases, but LU decomposition
+                                      is cached so it can be faster for data with many similar
+                                      flagging patterns.
+                        'dpss_solve', dpss fitting using linalg.lu_solve. Comparable in
+                                      speed to leastsq in many cases, but LU decomposition
+                                      is cached so it can be faster for data with many similar
+                                      flagging patterns.
+                        'dft_solve', dft fitting using linalg.lu_solve
                         'dpss_matrix', dpss fitting using direct lin-lsq matrix
                                        computation. Slower then lsq but provides linear
                                        operator that can be used to propagate
@@ -457,7 +470,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                            raise ValueError("filter_dims can either contain 0, 1, or -1.")
                    supported_modes=['clean', 'dft_leastsq', 'dpss_leastsq', 'dft_matrix', 'dpss_matrix', 'dayenu',
                                     'dayenu_dft_leastsq', 'dayenu_dpss_leastsq', 'dayenu_dpss_matrix',
-                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dft_solve', 'dpss_cholesky']
+                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dft_solve']
                    if not mode in supported_modes:
                        raise ValueError("Need to supply a mode in supported modes:%s"%(str(supported_modes)))
                    mode = mode.split('_')
@@ -1668,9 +1681,12 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     info['amat'] = amat
     info['skipped'] = False
     if _are_wgts_binary(w):
+        # Build mask and flags arrays
         mask = np.array(w, dtype=bool)
         flags = np.logical_not(mask)
-        if method in ['matrix', 'solve', 'lusolve']:
+
+        # Pre-compute expected XTX matrix without flags for faster computation later
+        if method in ['matrix', 'solve']:
             square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                         filter_factors=suppression_vector, x=x, hash_decimal=hash_decimal,
                                         label='covariance', basis=basis)
@@ -1701,18 +1717,21 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
 
             cn_out = np.dot(XTXinv, Xy)
 
-        elif method == 'lusolve':
-            if fm_key in cache:
-                L = cache[fm_key]
-            else:
-                L = linalg.lu_factor(XTX)
-                cache[fm_key] = L
-
-            cn_out = linalg.lu_solve(L, Xy)
-        
         elif method == 'solve':
-            cn_out = np.linalg.solve(XTX, Xy)
+            try:
+                if fm_key in cache:
+                    L = cache[fm_key]
+                else:
+                    L = linalg.lu_factor(XTX)
+                    cache[fm_key] = L
 
+                cn_out = linalg.lu_solve(L, Xy)
+
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        
         elif method == 'leastsq':
             try:
                 res = lsq_linear(amat[mask], y[mask])
@@ -1749,21 +1768,9 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             cn_out = fmat @ y
 
         elif method == 'solve':
-            try:
-                A = (np.conj(amat).T * w) @ amat
-                b = np.conj(amat).T @ (w * y)
-                cn_out = np.linalg.solve(A, b)
-
-            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-                warn(f"{err} -- recording skipped integration in info and setting to zero.")
-                cn_out = 0.0
-                info['skipped'] = True
-
-        elif method == 'cholesky':
             fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                         filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                         label='fitting matrix', basis=basis, mode=method)
-                                        
             try:
                 if fm_key in cache:
                     L = cache[fm_key]
@@ -1781,7 +1788,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 info['skipped'] = True
 
         else:
-            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
+            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
     model = amat @ (suppression_vector * cn_out)
     resid = (y - model) * (~np.isclose(w, 0, atol=1e-10)).astype(float) #suppress flagged residuals (such as RFI)
     return model, resid, info
