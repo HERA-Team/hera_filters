@@ -108,6 +108,11 @@ def _get_filter_area(x, filter_center, filter_width):
         av = np.ones(nx)
     return av
 
+def _are_wgts_binary(wgts):
+    """
+    """
+    binary_total = np.sum(np.isclose(wgts, 0) + np.isclose(wgts, 1))
+    return binary_total == np.prod(wgts.shape)
 
 def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     """If possible, place data on a uniformly spaced grid.
@@ -1662,74 +1667,121 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     info['basis_options'] = basis_options
     info['amat'] = amat
     info['skipped'] = False
-    if method == 'leastsq':
-        a = np.atleast_2d(w).T * amat
-        try:
-            res = lsq_linear(a, w * y)
-            cn_out = res.x
-        # np.linalg.LinAlgError catches "SVD did not converge."
-        # which can happen if the solution is under-constrained.
-        # also handle nans and infs in the data here too.
-        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-            warn(f"{err} -- recording skipped integration in info and setting to zero.")
-            cn_out = 0.0
-            info['skipped'] = True
-    elif method == 'matrix':
-        fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                      filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
-                                      label='fitting matrix', basis=basis)
-        if basis.lower() == 'dft':
-            fm_key = fm_key + (basis_options['fundamental_period'], )
-        elif basis.lower() == 'dpss':
-            fm_key = fm_key + tuple(nterms)
-        fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key)
-        info['fitting_matrix'] = fmat
-        cn_out = fmat @ y
-
-    elif method == 'solve':
-        try:
-            A = (np.conj(amat).T * w) @ amat
-            b = np.conj(amat).T @ (w * y)
-            cn_out = np.linalg.solve(A, b)
-
-        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-            warn(f"{err} -- recording skipped integration in info and setting to zero.")
-            cn_out = 0.0
-            info['skipped'] = True
-
-    elif method == 'cholesky':
-        fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                      filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
-                                      label='fitting matrix', basis=basis, mode='cholesky')
-        square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                      filter_factors=suppression_vector, x=x, hash_decimal=hash_decimal,
-                                      label='covariance', basis=basis)
-        mask = w.astype(bool)
+    if _are_wgts_binary(w):
+        mask = np.array(w, dtype=bool)
         flags = np.logical_not(mask)
-        try:
+        if method in ['matrix', 'solve', 'lusolve']:
+            square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, hash_decimal=hash_decimal,
+                                        label='covariance', basis=basis)
+            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                        label='fitting matrix', basis=basis, mode=method)
             if square_key in cache:
                 covmat = cache[square_key]
             else:
                 covmat = np.dot(np.conj(amat).T, amat)
                 cache[square_key] = covmat
 
+            if not fm_key in cache:
+                XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
+
+            Xy = np.conj(amat[mask]).T @ y[mask]
+
+        if method == 'matrix':
+            if fm_key in cache:
+                XTXinv = cache[fm_key]
+            else:
+                try:
+                    XTXinv = np.linalg.inv(XTX)
+                except:
+                    XTXinv = np.linalg.pinv(XTX)
+
+                cache[fm_key] = XTXinv
+
+            cn_out = np.dot(XTXinv, Xy)
+
+        elif method == 'lusolve':
             if fm_key in cache:
                 L = cache[fm_key]
             else:
-                XTX = covmat - np.conj(amat[flags]).T @ amat[flags] + np.eye(covmat.shape[0]) * 1e-12
                 L = linalg.lu_factor(XTX)
                 cache[fm_key] = L
 
-            Xy = np.conj(amat[mask]).T @ y[mask]
             cn_out = linalg.lu_solve(L, Xy)
+        
+        elif method == 'solve':
+            cn_out = np.linalg.solve(XTX, Xy)
 
-        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-            warn(f"{err} -- recording skipped integration in info and setting to zero.")
-            cn_out = 0.0
-            info['skipped'] = True
-
+        elif method == 'leastsq':
+            try:
+                res = lsq_linear(amat[mask], y[mask])
+                cn_out = res.x
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        else:
+            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
     else:
-        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
+        if method == 'leastsq':
+            a = np.atleast_2d(w).T * amat
+            try:
+                res = lsq_linear(a, w * y)
+                cn_out = res.x
+            # np.linalg.LinAlgError catches "SVD did not converge."
+            # which can happen if the solution is under-constrained.
+            # also handle nans and infs in the data here too.
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        elif method == 'matrix':
+            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                        label='fitting matrix', basis=basis)
+            if basis.lower() == 'dft':
+                fm_key = fm_key + (basis_options['fundamental_period'], )
+            elif basis.lower() == 'dpss':
+                fm_key = fm_key + tuple(nterms)
+            fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key)
+            info['fitting_matrix'] = fmat
+            cn_out = fmat @ y
+
+        elif method == 'solve':
+            try:
+                A = (np.conj(amat).T * w) @ amat
+                b = np.conj(amat).T @ (w * y)
+                cn_out = np.linalg.solve(A, b)
+
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+
+        elif method == 'cholesky':
+            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                        label='fitting matrix', basis=basis, mode=method)
+                                        
+            try:
+                if fm_key in cache:
+                    L = cache[fm_key]
+                else:
+                    XTX = np.dot(np.conj(amat).T * w, amat)
+                    L = linalg.lu_factor(XTX)
+                    cache[fm_key] = L
+
+                Xy = np.dot(np.conj(amat).T * w, y)
+                cn_out = linalg.lu_solve(L, Xy)
+
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+
+        else:
+            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
     model = amat @ (suppression_vector * cn_out)
     resid = (y - model) * (~np.isclose(w, 0, atol=1e-10)).astype(float) #suppress flagged residuals (such as RFI)
     return model, resid, info
