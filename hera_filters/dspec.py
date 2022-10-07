@@ -1708,11 +1708,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             if fm_key in cache:
                 XTXinv = cache[fm_key]
             else:
-                try:
-                    XTXinv = np.linalg.inv(XTX)
-                except:
-                    XTXinv = np.linalg.pinv(XTX)
-
+                XTXinv = np.linalg.pinv(XTX)
                 cache[fm_key] = XTXinv
 
             cn_out = np.dot(XTXinv, Xy)
