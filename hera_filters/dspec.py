@@ -1686,23 +1686,22 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         flags = np.logical_not(mask)
 
         # Pre-compute expected XTX matrix without flags for faster computation later
-        if method in ['matrix', 'solve']:
-            square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                        filter_factors=suppression_vector, x=x, hash_decimal=hash_decimal,
-                                        label='covariance', basis=basis)
-            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
-                                        label='fitting matrix', basis=basis, mode=method)
-            if square_key in cache:
-                covmat = cache[square_key]
-            else:
-                covmat = np.dot(np.conj(amat).T, amat)
-                cache[square_key] = covmat
+        square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                    filter_factors=suppression_vector, x=x, hash_decimal=hash_decimal,
+                                    label='covariance', basis=basis)
+        fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                    filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                    label='fitting matrix', basis=basis, mode=method)
+        if square_key in cache:
+            covmat = cache[square_key]
+        else:
+            covmat = np.dot(np.conj(amat).T, amat)
+            cache[square_key] = covmat
 
-            if not fm_key in cache:
-                XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
+        if not fm_key in cache:
+            XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
 
-            Xy = np.conj(amat[mask]).T @ y[mask]
+        Xy = np.conj(amat[mask]).T @ y[mask]
 
         if method == 'matrix':
             if fm_key in cache:
@@ -1730,7 +1729,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         
         elif method == 'leastsq':
             try:
-                res = lsq_linear(amat[mask], y[mask])
+                res = lsq_linear(XTX, Xy)
                 cn_out = res.x
             except (np.linalg.LinAlgError, ValueError, TypeError) as err:
                 warn(f"{err} -- recording skipped integration in info and setting to zero.")
