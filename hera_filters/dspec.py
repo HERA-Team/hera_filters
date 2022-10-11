@@ -1687,8 +1687,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
 
         # Pre-compute expected XTX matrix without flags for faster computation later
         square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                    filter_factors=suppression_vector, x=x, hash_decimal=hash_decimal,
-                                    label='covariance', basis=basis)
+                                    x=x, hash_decimal=hash_decimal, label='covariance')
         fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                     filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                     label='fitting matrix', basis=basis, mode=method)
