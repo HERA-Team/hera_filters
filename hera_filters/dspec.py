@@ -1707,7 +1707,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 cmat = np.linalg.pinv(XTX) @ np.conj(amat[mask]).T
                 cache[fm_key] = cmat
 
-            cn_out = np.dot(cmat, y)
+            cn_out = np.dot(cmat, y[mask])
 
         elif method == 'solve':
             if fm_key in cache:
