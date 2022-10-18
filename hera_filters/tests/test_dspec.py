@@ -1179,6 +1179,22 @@ def test__fit_basis_1d():
         mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
                                 method='undefined', basis='dpss')
 
+    # Run to trigger skip 
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss')
+    assert info1['skipped']
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, np.full_like(dw, np.nan), [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='leastsq', basis='dpss')
+    assert info1['skipped']
+
+    # Trigger cache for solve
+    cache = {}
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss', cache=cache)
+    mod2, _, info2 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss', cache=cache)                            
+    assert np.allclose(mod1, mod2)
+
 def test_fit_basis_1d_with_missing_channels():
     fs = np.arange(-50,50)
     #here is some data

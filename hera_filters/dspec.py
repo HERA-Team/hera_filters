@@ -1712,17 +1712,16 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             cn_out = np.dot(XTXinv, Xy)
 
         elif method == 'solve':
-            try:
-                if fm_key in cache:
-                    L = cache[fm_key]
-                else:
-                    L = linalg.lu_factor(XTX)
-                    cache[fm_key] = L
+            if fm_key in cache:
+                L = cache[fm_key]
+            else:
+                L = linalg.lu_factor(XTX)
+                cache[fm_key] = L
 
-                cn_out = linalg.lu_solve(L, Xy)
+            cn_out = linalg.lu_solve(L, Xy)
 
-            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+            if np.any(np.isnan(cn_out)):
+                warn(f"Recording skipped integration in info and setting to zero.")
                 cn_out = 0.0
                 info['skipped'] = True
         
@@ -1765,21 +1764,15 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                         filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                         label='fitting matrix', basis=basis, mode=method)
-            try:
-                if fm_key in cache:
-                    L = cache[fm_key]
-                else:
-                    XTX = np.dot(np.conj(amat).T * w, amat)
-                    L = linalg.lu_factor(XTX)
-                    cache[fm_key] = L
+            if fm_key in cache:
+                L = cache[fm_key]
+            else:
+                XTX = np.dot(np.conj(amat).T * w, amat)
+                L = linalg.lu_factor(XTX)
+                cache[fm_key] = L
 
-                Xy = np.dot(np.conj(amat).T * w, y)
-                cn_out = linalg.lu_solve(L, Xy)
-
-            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-                warn(f"{err} -- recording skipped integration in info and setting to zero.")
-                cn_out = 0.0
-                info['skipped'] = True
+            Xy = np.dot(np.conj(amat).T * w, y)
+            cn_out = linalg.lu_solve(L, Xy)
 
         else:
             raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
