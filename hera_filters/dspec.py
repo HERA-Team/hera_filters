@@ -1700,14 +1700,16 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         if not fm_key in cache:
             XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
 
+        Xy = np.conj(amat[mask]).T @ y[mask]
+
         if method == 'matrix':
             if fm_key in cache:
-                cmat = cache[fm_key]
+                XTXinv = cache[fm_key]
             else:
-                cmat = np.linalg.pinv(XTX) @ np.conj(amat[mask]).T
-                cache[fm_key] = cmat
+                XTXinv = np.linalg.pinv(XTX)
+                cache[fm_key] = XTXinv
 
-            cn_out = np.dot(cmat, y[mask])
+            cn_out = np.dot(XTXinv, Xy)
 
         elif method == 'solve':
             if fm_key in cache:
@@ -1716,7 +1718,6 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 L = linalg.lu_factor(XTX)
                 cache[fm_key] = L
 
-            Xy = np.conj(amat[mask]).T @ y[mask]
             cn_out = linalg.lu_solve(L, Xy)
 
             if np.any(np.isnan(cn_out)):
@@ -1726,7 +1727,6 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         
         elif method == 'leastsq':
             try:
-                Xy = np.conj(amat[mask]).T @ y[mask]
                 res = lsq_linear(XTX, Xy)
                 cn_out = res.x
             except (np.linalg.LinAlgError, ValueError, TypeError) as err:
