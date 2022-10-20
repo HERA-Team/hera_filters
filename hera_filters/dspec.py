@@ -10,6 +10,7 @@ from scipy.signal import windows
 from warnings import warn
 from scipy.optimize import leastsq, lsq_linear
 import copy
+from scipy import linalg
 
 #DEFAULT PARAMETERS FOR CLEANs
 CLEAN_DEFAULTS_1D={'tol':1e-9, 'window':'none',
@@ -107,6 +108,18 @@ def _get_filter_area(x, filter_center, filter_width):
         av = np.ones(nx)
     return av
 
+def _are_wgts_binary(wgts):
+    """
+    Returns whether or not a weights array can be cast as as boolean mask
+
+    Arguments:
+        wgts : array-like vector containing floats
+    
+    Returns:
+        Value of True if wgts contains only 1's and 0's
+    """
+    binary_total = np.sum(np.isclose(wgts, 0) + np.isclose(wgts, 1))
+    return binary_total == np.prod(wgts.shape)
 
 def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     """If possible, place data on a uniformly spaced grid.
@@ -298,9 +311,15 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                         specify filtering mode. Currently supported are
                         'clean', iterative clean
                         'dpss_leastsq', dpss fitting using scipy.optimize.lsq_linear
-                        'dft_leastsq', dft fitting using scipy.optimize.lsq_linear
-                        'dpss_solve', dpss fitting using np.linalg.solve
-                        'dft_solve', dft fitting using np.linalg.solve
+                        'dft_leastsq', dft fitting using scipy.optimize.lsq_linear. Comparable in
+                                      speed to leastsq in many cases, but LU decomposition
+                                      is cached so it can be faster for data with many similar
+                                      flagging patterns.
+                        'dpss_solve', dpss fitting using linalg.lu_solve. Comparable in
+                                      speed to leastsq in many cases, but LU decomposition
+                                      is cached so it can be faster for data with many similar
+                                      flagging patterns.
+                        'dft_solve', dft fitting using linalg.lu_solve
                         'dpss_matrix', dpss fitting using direct lin-lsq matrix
                                        computation. Slower then lsq but provides linear
                                        operator that can be used to propagate
@@ -1661,43 +1680,102 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     info['basis_options'] = basis_options
     info['amat'] = amat
     info['skipped'] = False
-    if method == 'leastsq':
-        a = np.atleast_2d(w).T * amat
-        try:
-            res = lsq_linear(a, w * y)
-            cn_out = res.x
-        # np.linalg.LinAlgError catches "SVD did not converge."
-        # which can happen if the solution is under-constrained.
-        # also handle nans and infs in the data here too.
-        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-            warn(f"{err} -- recording skipped integration in info and setting to zero.")
-            cn_out = 0.0
-            info['skipped'] = True
-    elif method == 'matrix':
+    if _are_wgts_binary(w):
+        # Build mask and flags arrays
+        mask = np.array(w, dtype=bool)
+        flags = np.logical_not(mask)
+
+        # Pre-compute expected XTX matrix without flags for faster computation later
+        square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                    x=x, hash_decimal=hash_decimal, label='covariance')
         fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                      filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
-                                      label='fitting matrix', basis=basis)
-        if basis.lower() == 'dft':
-            fm_key = fm_key + (basis_options['fundamental_period'], )
-        elif basis.lower() == 'dpss':
-            fm_key = fm_key + tuple(nterms)
-        fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key)
-        info['fitting_matrix'] = fmat
-        cn_out = fmat @ y
+                                    filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                    label='fitting matrix', basis=basis, mode=method)
+        if square_key in cache:
+            covmat = cache[square_key]
+        else:
+            covmat = np.dot(np.conj(amat).T, amat)
+            cache[square_key] = covmat
 
-    elif method == 'solve':
-        try:
-            A = (np.conj(amat).T * w) @ amat
-            b = np.conj(amat).T @ (w * y)
-            cn_out = np.linalg.solve(A, b)
+        if not fm_key in cache:
+            XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
 
-        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-            warn(f"{err} -- recording skipped integration in info and setting to zero.")
-            cn_out = 0.0
-            info['skipped'] = True
+        Xy = np.conj(amat[mask]).T @ y[mask]
 
+        if method == 'matrix':
+            if fm_key in cache:
+                XTXinv = cache[fm_key]
+            else:
+                XTXinv = np.linalg.pinv(XTX)
+                cache[fm_key] = XTXinv
+
+            cn_out = np.dot(XTXinv, Xy)
+
+        elif method == 'solve':
+            if fm_key in cache:
+                L = cache[fm_key]
+            else:
+                L = linalg.lu_factor(XTX)
+                cache[fm_key] = L
+
+            cn_out = linalg.lu_solve(L, Xy)
+
+            if np.any(np.isnan(cn_out)):
+                warn(f"Recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        
+        elif method == 'leastsq':
+            try:
+                res = lsq_linear(XTX, Xy)
+                cn_out = res.x
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        else:
+            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
     else:
-        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
+        if method == 'leastsq':
+            a = np.atleast_2d(w).T * amat
+            try:
+                res = lsq_linear(a, w * y)
+                cn_out = res.x
+            # np.linalg.LinAlgError catches "SVD did not converge."
+            # which can happen if the solution is under-constrained.
+            # also handle nans and infs in the data here too.
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        elif method == 'matrix':
+            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                        label='fitting matrix', basis=basis)
+            if basis.lower() == 'dft':
+                fm_key = fm_key + (basis_options['fundamental_period'], )
+            elif basis.lower() == 'dpss':
+                fm_key = fm_key + tuple(nterms)
+            fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key)
+            info['fitting_matrix'] = fmat
+            cn_out = fmat @ y
+
+        elif method == 'solve':
+            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                        label='fitting matrix', basis=basis, mode=method)
+            if fm_key in cache:
+                L = cache[fm_key]
+            else:
+                XTX = np.dot(np.conj(amat).T * w, amat)
+                L = linalg.lu_factor(XTX)
+                cache[fm_key] = L
+
+            Xy = np.dot(np.conj(amat).T * w, y)
+            cn_out = linalg.lu_solve(L, Xy)
+
+        else:
+            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
     model = amat @ (suppression_vector * cn_out)
     resid = (y - model) * (~np.isclose(w, 0, atol=1e-10)).astype(float) #suppress flagged residuals (such as RFI)
     return model, resid, info

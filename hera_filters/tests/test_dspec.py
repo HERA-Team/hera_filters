@@ -64,6 +64,15 @@ def test_delay_filter_1D():
     dmdl, dres, info = dspec.delay_filter(data, wgts, 0., .1/NCHAN, tol=TOL, skip_wgt=0.5, mode='clean')
     assert info['status']['axis_1'][0] == 'skipped'
 
+def test_are_wgts_binary():
+    # Binary weights array should return True
+    wgts = np.random.choice([0, 1], size=100)
+    assert dspec._are_wgts_binary(wgts)
+
+    # Random weights array should return False
+    wgts = np.random.uniform(0, 1, size=100)
+    assert not dspec._are_wgts_binary(wgts)
+
 def test_delay_filter_2D():
     NCHAN = 128
     NTIMES = 10
@@ -1192,11 +1201,6 @@ def test__fit_basis_1d():
 
     assert np.all(np.isclose((mod2+resid2)*wgts, dw, atol=1e-6))
 
-    # Check failure mode of np.linalg.solve
-    mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5./50.], basis_options=dpss_opts,
-                                    method='solve', basis='dpss')
-    assert info1['skipped']
-
     # Check errors
     with pytest.raises(ValueError):
         mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
@@ -1205,6 +1209,38 @@ def test__fit_basis_1d():
     with pytest.raises(ValueError):
         mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
                                 method='solve', basis='undefined')
+
+    # Test with weights grid that is not like mask
+    wgts = np.ones_like(data)
+    wgts += 0.01
+    mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='leastsq', basis='dpss')
+    mod2, resid2, info2 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='matrix', basis='dpss')
+    mod3, resid3, info3 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='solve', basis='dpss')
+    assert np.allclose(mod1, mod2)
+    assert np.allclose(mod1, mod3)
+
+    with pytest.raises(ValueError):
+        mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='undefined', basis='dpss')
+
+    # Run to trigger skip 
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss')
+    assert info1['skipped']
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, np.full_like(dw, np.nan), [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='leastsq', basis='dpss')
+    assert info1['skipped']
+
+    # Trigger cache for solve
+    cache = {}
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss', cache=cache)
+    mod2, _, info2 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss', cache=cache)                            
+    assert np.allclose(mod1, mod2)
 
 def test_fit_basis_1d_with_missing_channels():
     fs = np.arange(-50,50)
