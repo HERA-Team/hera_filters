@@ -4,6 +4,7 @@ import pytest
 from pyuvdata import UVData
 from ..data import DATA_PATH
 import os
+from scipy.special import eval_legendre
 import scipy.signal.windows as windows
 import warnings
 random.seed(0)
@@ -62,6 +63,15 @@ def test_delay_filter_1D():
     wgts[:72] = 0.
     dmdl, dres, info = dspec.delay_filter(data, wgts, 0., .1/NCHAN, tol=TOL, skip_wgt=0.5, mode='clean')
     assert info['status']['axis_1'][0] == 'skipped'
+
+def test_are_wgts_binary():
+    # Binary weights array should return True
+    wgts = np.random.choice([0, 1], size=100)
+    assert dspec._are_wgts_binary(wgts)
+
+    # Random weights array should return False
+    wgts = np.random.uniform(0, 1, size=100)
+    assert not dspec._are_wgts_binary(wgts)
 
 def test_delay_filter_2D():
     NCHAN = 128
@@ -224,6 +234,52 @@ def test_dft_operator():
     fop1 = dspec.dft_operator(freqs, 0., 1e-6, fundamental_period=200*1e5)
     np.testing.assert_allclose(fop1, y1)
 
+def test_normalized_legendre():
+    kmax = 5
+    NF = 100
+    x = np.linspace(-0.75, 0.75, NF)
+
+    # Check output matches scipy result
+    polynomials = dspec._normalized_legendre(x, kmax)
+    true_polys = np.transpose([np.sqrt(i + 0.5) * eval_legendre(i, x) for i in range(kmax)])
+    np.testing.assert_allclose(polynomials, true_polys)
+
+def test_calculate_amat():
+    """
+    """
+    kmax = 100
+    c = 20
+    eigenvals, eigenvecs = dspec._calculate_amat(kmax, c)
+    # Check that eigenvalues and eigenvectors are the correct size
+    assert eigenvals.shape[0] == kmax
+    assert eigenvecs.shape == (kmax, kmax)
+    # Check orthogonality
+    np.testing.assert_allclose(np.diag(eigenvecs.T @ eigenvecs), np.ones(kmax))
+
+def test_pswf_operator():
+    #test that an error is thrown when we specify more then one
+    #termination method.
+    NF = 100
+    DF = 100e3
+    freqs = np.arange(-NF/2, NF/2)*DF + 150e6
+    pytest.raises(ValueError, dspec.pswf_operator, x=freqs, filter_centers=[0.], filter_half_widths=[1e-6], nterms=[5], eigenval_cutoff=[1e-9])
+    #now calculate PSWF operator matrices using different cutoff criteria. The columns
+    #should be the same up to the minimum number of columns of the three techniques.
+    amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9])
+    amat2, ncol2 = dspec.pswf_operator(freqs, [0.], [100e-9], nterms=[50])
+    ncols = [ncol1, ncol2]
+    ncolmin = np.min(ncols)
+    #check that all columns of matrices obtained with different methods
+    #of cutoff are identical.
+    for m in range(ncolmin):
+        np.testing.assert_allclose(np.abs(amat1[:,m]), np.abs(amat2[:,m]))
+    # Compute partial pswf w/ xmin and xmax and show it gives more terms than amat1
+    amat3, ncol3 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9], xmin=freqs.min() / 2, xmax=freqs.max() * 2)
+    assert sum(ncol3) > sum(ncol1)
+    # Compute partial pswf w/ xmin and xmax
+    amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9])
+    amat2, ncol2 = dspec.pswf_operator(freqs, [0., 100e-9], [100e-9, 100e-9], eigenval_cutoff=[1e-9, 1e-9])
+    assert sum(ncol2) == 2 * sum(ncol1)
 
 def test_dpss_operator():
     #test that an error is thrown when we specify more then one
@@ -1145,11 +1201,6 @@ def test__fit_basis_1d():
 
     assert np.all(np.isclose((mod2+resid2)*wgts, dw, atol=1e-6))
 
-    # Check failure mode of np.linalg.solve
-    mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5./50.], basis_options=dpss_opts,
-                                    method='solve', basis='dpss')
-    assert info1['skipped']
-
     # Check errors
     with pytest.raises(ValueError):
         mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
@@ -1158,6 +1209,38 @@ def test__fit_basis_1d():
     with pytest.raises(ValueError):
         mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
                                 method='solve', basis='undefined')
+
+    # Test with weights grid that is not like mask
+    wgts = np.ones_like(data)
+    wgts += 0.01
+    mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='leastsq', basis='dpss')
+    mod2, resid2, info2 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='matrix', basis='dpss')
+    mod3, resid3, info3 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='solve', basis='dpss')
+    assert np.allclose(mod1, mod2)
+    assert np.allclose(mod1, mod3)
+
+    with pytest.raises(ValueError):
+        mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='undefined', basis='dpss')
+
+    # Run to trigger skip 
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss')
+    assert info1['skipped']
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, np.full_like(dw, np.nan), [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='leastsq', basis='dpss')
+    assert info1['skipped']
+
+    # Trigger cache for solve
+    cache = {}
+    mod1, _, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss', cache=cache)
+    mod2, _, info2 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
+                                method='solve', basis='dpss', cache=cache)                            
+    assert np.allclose(mod1, mod2)
 
 def test_fit_basis_1d_with_missing_channels():
     fs = np.arange(-50,50)

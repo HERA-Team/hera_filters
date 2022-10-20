@@ -10,6 +10,7 @@ from scipy.signal import windows
 from warnings import warn
 from scipy.optimize import leastsq, lsq_linear
 import copy
+from scipy import linalg
 
 #DEFAULT PARAMETERS FOR CLEANs
 CLEAN_DEFAULTS_1D={'tol':1e-9, 'window':'none',
@@ -107,6 +108,18 @@ def _get_filter_area(x, filter_center, filter_width):
         av = np.ones(nx)
     return av
 
+def _are_wgts_binary(wgts):
+    """
+    Returns whether or not a weights array can be cast as as boolean mask
+
+    Arguments:
+        wgts : array-like vector containing floats
+    
+    Returns:
+        Value of True if wgts contains only 1's and 0's
+    """
+    binary_total = np.sum(np.isclose(wgts, 0) + np.isclose(wgts, 1))
+    return binary_total == np.prod(wgts.shape)
 
 def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     """If possible, place data on a uniformly spaced grid.
@@ -298,9 +311,15 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode,
                         specify filtering mode. Currently supported are
                         'clean', iterative clean
                         'dpss_leastsq', dpss fitting using scipy.optimize.lsq_linear
-                        'dft_leastsq', dft fitting using scipy.optimize.lsq_linear
-                        'dpss_solve', dpss fitting using np.linalg.solve
-                        'dft_solve', dft fitting using np.linalg.solve
+                        'dft_leastsq', dft fitting using scipy.optimize.lsq_linear. Comparable in
+                                      speed to leastsq in many cases, but LU decomposition
+                                      is cached so it can be faster for data with many similar
+                                      flagging patterns.
+                        'dpss_solve', dpss fitting using linalg.lu_solve. Comparable in
+                                      speed to leastsq in many cases, but LU decomposition
+                                      is cached so it can be faster for data with many similar
+                                      flagging patterns.
+                        'dft_solve', dft fitting using linalg.lu_solve
                         'dpss_matrix', dpss fitting using direct lin-lsq matrix
                                        computation. Slower then lsq but provides linear
                                        operator that can be used to propagate
@@ -1661,43 +1680,102 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     info['basis_options'] = basis_options
     info['amat'] = amat
     info['skipped'] = False
-    if method == 'leastsq':
-        a = np.atleast_2d(w).T * amat
-        try:
-            res = lsq_linear(a, w * y)
-            cn_out = res.x
-        # np.linalg.LinAlgError catches "SVD did not converge."
-        # which can happen if the solution is under-constrained.
-        # also handle nans and infs in the data here too.
-        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-            warn(f"{err} -- recording skipped integration in info and setting to zero.")
-            cn_out = 0.0
-            info['skipped'] = True
-    elif method == 'matrix':
+    if _are_wgts_binary(w):
+        # Build mask and flags arrays
+        mask = np.array(w, dtype=bool)
+        flags = np.logical_not(mask)
+
+        # Pre-compute expected XTX matrix without flags for faster computation later
+        square_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                    x=x, hash_decimal=hash_decimal, label='covariance')
         fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
-                                      filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
-                                      label='fitting matrix', basis=basis)
-        if basis.lower() == 'dft':
-            fm_key = fm_key + (basis_options['fundamental_period'], )
-        elif basis.lower() == 'dpss':
-            fm_key = fm_key + tuple(nterms)
-        fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key)
-        info['fitting_matrix'] = fmat
-        cn_out = fmat @ y
+                                    filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                    label='fitting matrix', basis=basis, mode=method)
+        if square_key in cache:
+            covmat = cache[square_key]
+        else:
+            covmat = np.dot(np.conj(amat).T, amat)
+            cache[square_key] = covmat
 
-    elif method == 'solve':
-        try:
-            A = (np.conj(amat).T * w) @ amat
-            b = np.conj(amat).T @ (w * y)
-            cn_out = np.linalg.solve(A, b)
+        if not fm_key in cache:
+            XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
 
-        except (np.linalg.LinAlgError, ValueError, TypeError) as err:
-            warn(f"{err} -- recording skipped integration in info and setting to zero.")
-            cn_out = 0.0
-            info['skipped'] = True
+        Xy = np.conj(amat[mask]).T @ y[mask]
 
+        if method == 'matrix':
+            if fm_key in cache:
+                XTXinv = cache[fm_key]
+            else:
+                XTXinv = np.linalg.pinv(XTX)
+                cache[fm_key] = XTXinv
+
+            cn_out = np.dot(XTXinv, Xy)
+
+        elif method == 'solve':
+            if fm_key in cache:
+                L = cache[fm_key]
+            else:
+                L = linalg.lu_factor(XTX)
+                cache[fm_key] = L
+
+            cn_out = linalg.lu_solve(L, Xy)
+
+            if np.any(np.isnan(cn_out)):
+                warn(f"Recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        
+        elif method == 'leastsq':
+            try:
+                res = lsq_linear(XTX, Xy)
+                cn_out = res.x
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        else:
+            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
     else:
-        raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
+        if method == 'leastsq':
+            a = np.atleast_2d(w).T * amat
+            try:
+                res = lsq_linear(a, w * y)
+                cn_out = res.x
+            # np.linalg.LinAlgError catches "SVD did not converge."
+            # which can happen if the solution is under-constrained.
+            # also handle nans and infs in the data here too.
+            except (np.linalg.LinAlgError, ValueError, TypeError) as err:
+                warn(f"{err} -- recording skipped integration in info and setting to zero.")
+                cn_out = 0.0
+                info['skipped'] = True
+        elif method == 'matrix':
+            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                        label='fitting matrix', basis=basis)
+            if basis.lower() == 'dft':
+                fm_key = fm_key + (basis_options['fundamental_period'], )
+            elif basis.lower() == 'dpss':
+                fm_key = fm_key + tuple(nterms)
+            fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key)
+            info['fitting_matrix'] = fmat
+            cn_out = fmat @ y
+
+        elif method == 'solve':
+            fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
+                                        filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
+                                        label='fitting matrix', basis=basis, mode=method)
+            if fm_key in cache:
+                L = cache[fm_key]
+            else:
+                XTX = np.dot(np.conj(amat).T * w, amat)
+                L = linalg.lu_factor(XTX)
+                cache[fm_key] = L
+
+            Xy = np.dot(np.conj(amat).T * w, y)
+            cn_out = linalg.lu_solve(L, Xy)
+
+        else:
+            raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve']."%(method))
     model = amat @ (suppression_vector * cn_out)
     resid = (y - model) * (~np.isclose(w, 0, atol=1e-10)).astype(float) #suppress flagged residuals (such as RFI)
     return model, resid, info
@@ -2118,6 +2196,218 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
             except np.linalg.LinAlgError as error:
                 print(error)
                 cache[opkey] = None
+    return cache[opkey]
+
+def _calculate_amat(k, c):
+    """
+    Computes the eigenvalues and eigenvectors of the decay coefficient matrix
+    used to compute prolate spheroidal wave functions. More information can be
+    found in the following paper: 
+        
+        https://www.sciencedirect.com/science/article/pii/S106352030400017X
+
+    Parameters:
+    ----------
+        k : int
+            Number of decay coefficients to compute
+        c: float
+            Bandwidth parameter used to compute prolate spheroidal wavefunctions.
+            Also equal to filter_width * bandwidth * pi.
+
+    Returns:
+    --------
+        eigenvals: np.ndarray
+            Eigenvalues of the decay coefficient matrix
+        eigenvecs: np.ndarray
+            Eigenvectors of the decay coefficient matrix
+    """
+    ks = np.arange(k)
+    amat = np.zeros((k + 2, k + 2))
+    amat[ks, ks] = (
+        ks * (ks + 1) + (2 * ks * (ks + 1) - 1) / ((2 * ks + 3) * (2 * ks - 1)) * c ** 2
+    )
+    amat[ks, ks + 2] = (
+        (ks + 2) * (ks + 1) / ((2 * ks + 3) * np.sqrt((2 * ks + 1) * (2 * ks + 5))) * c ** 2
+    )
+    amat[ks + 2, ks] = (
+        (ks + 2) * (ks + 1) / ((2 * ks + 3) * np.sqrt((2 * ks + 1) * (2 * ks + 5))) * c ** 2
+    )
+    eigenvals, eigenvecs = np.linalg.eigh(amat[:k, :k])
+    return eigenvals, eigenvecs
+
+def _normalized_legendre(x, kmax):
+    """
+    Fast computation of the first kmax normalized Legendre polynomials evaluated at points
+    x using the Bonnet's recurrence relation. More information can be found here:
+
+    https://en.wikipedia.org/wiki/Legendre_polynomials#Recurrence_relations
+
+    Parameters:
+    ----------
+        x : np.ndarray
+            Points at which to evaluate the Legendre polymonials
+        kmax : int
+            Number of normalized Legendre polynomials to compute
+
+    Returns:
+    --------
+        polynomials : np.ndarray
+            Normalized Legendre polynomials of shape (x.shape, kmax)
+    """
+    polynomials = []
+    for n in range(kmax):
+        if n == 0:
+            polynomials.append(np.ones_like(x))
+        elif n == 1:
+            polynomials.append(x)
+        else:
+            p1 = polynomials[n - 1]
+            p2 = polynomials[n - 2]
+            pn = ((2 * n - 1) * x * p1 - (n - 1) * p2) / float(n)
+            polynomials.append(pn)
+
+    polynomials = np.sqrt(np.arange(kmax) + 0.5) * np.transpose(polynomials)
+    return polynomials
+
+def pswf_operator(
+    x, filter_centers, filter_half_widths, eigenval_cutoff=None, nterms=None,
+    cache=None, xmin=None, xmax=None, hash_decimal=10,
+):
+    """
+    Calculates PSWF operator with multiple delay windows to fit data. Frequencies
+    do not need to be equally spaced (unlike DPSS operator). Users can specify how the
+    PSWF series fits are cutoff in each delay-filtering window with one (and only one)
+    of two conditions: approximated eigenvalues of the sinc function fall below a thresshold (eigenval_cutoff) or
+    user specified number of PSWF terms (nterms). 
+
+    Paper for algorithm used to compute the prolate spheroidal wave functions can be
+    found here:
+
+        https://www.sciencedirect.com/science/article/pii/S106352030400017X
+
+    Parameters
+    ----------
+    x: array-like
+        x values to evaluate operator at
+    filter_centers: array-like
+        list of floats of centers of delay filter windows in units of 1/units of x
+    filter_half_widths: array-like
+        list of floats of half-widths of delay filter windows in units of 1/units of x
+    cache: dictionary, optional
+        dictionary for storing operator matrices with keys
+        tuple(x) + tuple(filter_centers) + tuple(filter_half_widths)\
+         + (series_cutoff_name,) = tuple(series_cutoff_values)
+    eigenval_cutoff: list of floats, optional
+        list of sinc matrix eigenvalue cutoffs to use for included pswf modes.
+    nterms: list of integers, optional
+        integer specifying number of pswf terms to include in each delay fitting block.
+    xmin: float, optional
+        Lower bound of the frequency range. If not given, will be calculate from x
+    xmax: float, optional
+        Upper bound of the frequency range. If not given, will be calculate from x
+    hash_decimal: int
+        number of decimals to round for floating point dict keys.
+
+
+    Returns
+    ----------
+    2-tuple
+    First element:
+        Design matrix for PSWF fitting.   Ndata x (Nfilter_window * nterm)
+        transforming from PSWF modes to data.
+    Second element:
+        list of integers with number of terms for each fourier window specified by filter_centers
+        and filter_half_widths
+    """
+    if cache is None:
+        cache = {}
+
+    # Conditions for halting
+    crit_labels = ['eigenval_cutoff', 'nterms']
+    crit_list = [eigenval_cutoff, nterms]
+    crit_provided = np.asarray([not crit is None for crit in crit_list]).astype(bool)
+    crit_provided_name = [label for m,label in enumerate(crit_labels) if crit_provided[m]]
+    crit_provided_value = [crit for m,crit in enumerate(crit_list) if crit_provided[m]]
+    if np.count_nonzero(crit_provided) != 1:
+        raise ValueError(
+            "Must only provide a single series cutoff condition. %d were provided: %s "
+            % (np.count_nonzero(crit_provided), str(crit_provided_name))
+        )
+        
+    opkey = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths, x=x,
+                                      crit_name=crit_provided_name[0], label='pswf_operator', crit_val=tuple(crit_provided_value[0]),
+                                      hash_decimal=hash_decimal, xmin=xmin, xmax=xmax)
+    
+    if opkey not in cache:
+        # Normalize input array to -1 <= xg <= 1 unless a range is provided 
+        if xmin is None:
+            xmin = x.min()
+        if xmax is None:
+            xmax = x.max()
+        
+        xg = np.copy(x)
+        xg = 2 * (xg - xmin) / (xmax - xmin) - 1
+
+        # Estimate the number of polynomials needed
+        nwindows = []
+        for fw in filter_half_widths:
+            c = fw * np.pi * (xmax - xmin)
+            nw = 2 * c + 1
+            nwindows.append(nw)
+        kmax = np.round(np.min([np.max(nwindows), xg.shape[0]])).astype(int)
+
+        # Compute associated Legendre polynomials
+        polynomials = _normalized_legendre(xg, kmax)
+        
+        amat, _nterms = [], []
+        for fn, (fw, fc) in enumerate(zip(filter_half_widths, filter_centers)):
+            # Compute eigenvectors
+            c = fw * np.pi * (xmax - xmin)
+            eigenvals, eigenvecs = _calculate_amat(kmax, c)
+
+            # Sort eigenvectors by largest eigenvalue
+            idx = np.argsort(eigenvals)
+            eigenvecs = eigenvecs[:, idx]
+
+            # Calculate PSWFs from eigenvectors and legendre polynomials
+            pswf_vectors = polynomials @ eigenvecs
+
+            # If number of terms is given, truncate pswf vectors
+            if nterms is not None:
+                pswf_vectors = pswf_vectors[:, : nterms[fn]]
+                _nterms.append(nterms[fn])
+
+            # If eigenval_cutoff is given, estimate pswf eigenvalues
+            if eigenval_cutoff is not None:
+                # Get legendre polynomial at P(0)
+                poly = _normalized_legendre(np.array(0), kmax)
+                
+                # Evaluate PSWF a x=0
+                midpoint = poly @ eigenvecs
+                
+                # Compute eigenvalues
+                neven = np.arange(0, kmax, 2)
+                eigvals = np.abs(np.sqrt(2) * eigenvecs[0, neven] / midpoint[neven])
+                eigvals = (eigvals / eigvals.max()) ** 2
+                nt = np.max(neven[eigvals > eigenval_cutoff[fn]])
+                
+                # Truncate pswf vectors
+                pswf_vectors = pswf_vectors[:, :nt]
+                _nterms.append(nt)
+
+            # Apply filter center to design matrix
+            amat.append(
+                pswf_vectors
+                * np.exp(2j * np.pi * xg[:, None] * fc / (2 * np.pi * (xmax - xmin)))
+            )
+
+        # Stack design matrices
+        if len(amat) > 1:
+            amat = np.hstack(amat)
+        else:
+            amat = amat[0]
+
+        cache[opkey] = (amat, _nterms)
     return cache[opkey]
 
 
