@@ -82,7 +82,7 @@ def wedge_width(bl_len, sdf, nchan, standoff=0., horizon=1.):
     Returns:
         uthresh, lthresh: bin indices for filtered bins started at uthresh (which is filtered)
             and ending at lthresh (which is a negative integer and also not filtered)
-            Designed for area = np.ones(nchan, dtype=np.int); area[uthresh:lthresh] = 0
+            Designed for area = np.ones(nchan, dtype=int); area[uthresh:lthresh] = 0
     '''
     bl_dly = horizon * bl_len + standoff
     return calc_width(bl_dly, sdf, nchan)
@@ -197,7 +197,7 @@ def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     grid_size =int(np.round((x[-1] - x[0]) / dx)) + 1
     xout = np.linspace(x[0], x[-1], grid_size)
     dout = np.zeros(grid_size, dtype=np.complex128)
-    wout = np.zeros(grid_size, dtype=np.float)
+    wout = np.zeros(grid_size, dtype=float)
     inserted = np.ones(grid_size, dtype=bool)
     # fill in original data and weights.
     for x_index, xt in enumerate(x):
@@ -258,7 +258,7 @@ def calc_width(filter_size, real_delta, nsamples):
     Returns:
         uthresh, lthresh: bin indices for filtered bins started at uthresh (which is filtered)
             and ending at lthresh (which is a negative integer and also not filtered).
-            Designed for area = np.ones(nsamples, dtype=np.int); area[uthresh:lthresh] = 0
+            Designed for area = np.ones(nsamples, dtype=int); area[uthresh:lthresh] = 0
     '''
     if isinstance(filter_size, (list, tuple, np.ndarray)):
         _, l = calc_width(np.abs(filter_size[0]), real_delta, nsamples)
@@ -799,7 +799,7 @@ def dayenu_filter(x, data, wgts, filter_dimensions, filter_centers, filter_half_
     if not isinstance(x, (np.ndarray,list, tuple)):
         raise ValueError("x must be a numpy array, list, or tuple")
     # Check that inputs are tiples or lists
-    if not isinstance(filter_dimensions, (list,tuple,int, np.int)):
+    if not isinstance(filter_dimensions, (list, tuple, int)):
         raise ValueError("filter_dimensions must be a list or tuple")
     # if filter_dimensions are supplied as a single integer, convert to list (core code assumes lists).
     if isinstance(filter_dimensions, int):
@@ -809,7 +809,7 @@ def dayenu_filter(x, data, wgts, filter_dimensions, filter_centers, filter_half_
         raise ValueError("length of filter_dimensions cannot exceed 2")
     # make sure filter_dimensions are 0 or 1.
     for dim in filter_dimensions:
-        if not dim in [0, 1] or not isinstance(dim, (int, np.int)):
+        if not dim in [0, 1] or not isinstance(dim, int):
             raise ValueError("filter dimension must be integer 0, or 1")
 
     # convert filter dimensions to a list of integers (incase the dimensions were supplied as floats)
@@ -833,7 +833,7 @@ def dayenu_filter(x, data, wgts, filter_dimensions, filter_centers, filter_half_
         # If any of these inputs is a float or numpy array, convert to a list.
         if isinstance(avar, np.ndarray):
             check_vars[anum] = list(avar)
-        elif isinstance(avar, np.float):
+        elif isinstance(avar, float):
             check_vars[anum] = [avar]
 
     filter_centers,filter_half_widths,filter_factors = check_vars
@@ -1149,9 +1149,9 @@ def vis_filter(data, wgts, max_frate=None, dt=None, bl_len=None, sdf=None, stand
             fc = 0.
             fw = max_frate
         # 2D clean
-        if isinstance(edgecut_hi, (int, np.int)):
+        if isinstance(edgecut_hi, int):
             edgecut_hi = (edgecut_hi, edgecut_hi)
-        if isinstance(edgecut_low, (int, np.int)):
+        if isinstance(edgecut_low, int):
             edgecut_low = (edgecut_low, edgecut_low)
         if isinstance(window, str):
             window = (window, window)
@@ -1194,7 +1194,7 @@ def gen_window(window, N, alpha=0.5, edgecut_low=0, edgecut_hi=0, normalization=
         if normalization not in ["mean", "rms"]:
             raise ValueError("normalization must be one of ['rms', 'mean']")
     # parse multiple input window or special windows
-    w = np.zeros(N, dtype=np.float)
+    w = np.zeros(N, dtype=float)
     Ncut = edgecut_low + edgecut_hi
     if Ncut >= N:
         raise ValueError("Ncut >= N for edgecut_low {} and edgecut_hi {}".format(edgecut_low, edgecut_hi))
@@ -1543,9 +1543,9 @@ def delay_filter_leastsq(data, flags, sigma, nmax, add_noise=False,
 
     nmodes = nmax - nmin + 1
     # Array to store in-painted data
-    inp_data = np.zeros(data.shape, dtype=np.complex)
-    cn_array = np.zeros((data.shape[0], nmodes), dtype=np.complex)
-    mdl_array = np.zeros(data.shape, dtype=np.complex)
+    inp_data = np.zeros(data.shape, dtype=complex)
+    cn_array = np.zeros((data.shape[0], nmodes), dtype=complex)
+    mdl_array = np.zeros(data.shape, dtype=complex)
 
     # Loop over array
     cn_out = None
@@ -2708,11 +2708,11 @@ def dayenu_mat_inv(x, filter_centers, filter_half_widths,
     """
     if cache is None:
         cache = {}
-    if isinstance(filter_factors,(float,int, np.int, np.float)):
+    if isinstance(filter_factors,(float, int)):
         filter_factors = [filter_factors]
-    if isinstance(filter_centers, (float, int, np.int, np.float)):
+    if isinstance(filter_centers, (float, int)):
         filter_centers = [filter_centers]
-    if isinstance(filter_half_widths, (float, int, np.int, np.float)):
+    if isinstance(filter_half_widths, (float, int)):
         filter_half_widths = [filter_half_widths]
 
     nchan = len(x)

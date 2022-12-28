@@ -40,8 +40,8 @@ def test_delay_filter_dims():
 def test_delay_filter_1D():
     NCHAN = 128
     TOL = 1e-6
-    data = np.ones(NCHAN, dtype=np.complex)
-    wgts = .5*np.ones(NCHAN, dtype=np.complex)
+    data = np.ones(NCHAN, dtype=complex)
+    wgts = .5*np.ones(NCHAN, dtype=complex)
     dmdl, dres, info = dspec.delay_filter(data, wgts, 0., .1/NCHAN, tol=TOL)
     np.testing.assert_allclose(data, dmdl, atol=NCHAN*TOL)
     np.testing.assert_allclose(dres, np.zeros_like(dres), atol=NCHAN*TOL)
@@ -77,8 +77,8 @@ def test_delay_filter_2D():
     NCHAN = 128
     NTIMES = 10
     TOL = 1e-6
-    data = np.ones((NTIMES, NCHAN), dtype=np.complex)
-    wgts = np.ones((NTIMES, NCHAN), dtype=np.complex)
+    data = np.ones((NTIMES, NCHAN), dtype=complex)
+    wgts = np.ones((NTIMES, NCHAN), dtype=complex)
     dmdl, dres, info = dspec.delay_filter(data, wgts, 0., .1/NCHAN, tol=TOL)
     np.testing.assert_allclose(data, dmdl, atol=NCHAN*TOL)
     np.testing.assert_allclose(dres, np.zeros_like(dres), atol=NCHAN*TOL)
@@ -116,8 +116,8 @@ def test_delay_filter_leastsq():
     NCHAN = 128
     NTIMES = 10
     TOL = 1e-7
-    data = np.ones((NTIMES, NCHAN), dtype=np.complex)
-    flags = np.zeros((NTIMES, NCHAN), dtype=np.bool)
+    data = np.ones((NTIMES, NCHAN), dtype=complex)
+    flags = np.zeros((NTIMES, NCHAN), dtype=bool)
     sigma = 0.1 # Noise level (not important here)
 
     # Fourier coeffs for input data, ordered from (-nmax, nmax)
@@ -172,8 +172,8 @@ def test_skip_wgt():
     NCHAN = 128
     NTIMES = 10
     TOL = 1e-6
-    data = np.ones((NTIMES, NCHAN), dtype=np.complex)
-    wgts = np.ones((NTIMES, NCHAN), dtype=np.complex)
+    data = np.ones((NTIMES, NCHAN), dtype=complex)
+    wgts = np.ones((NTIMES, NCHAN), dtype=complex)
     wgts[0, 0:-4] = 0
     dmdl, dres, info = dspec.delay_filter(data, wgts, 0., .1/NCHAN, tol=TOL, skip_wgt=.1)
     np.testing.assert_allclose(data[1:,:], dmdl[1:,:], atol=NCHAN*TOL)
@@ -584,7 +584,7 @@ def test_vis_filter():
     dfr, ddly = frs[1] - frs[0], dlys[1] - dlys[0]
     d = 200 * np.exp(-2j*np.pi*times[:, None]*(frs[2]+dfr/4) - 2j*np.pi*freqs[None, :]*(dlys[2]+ddly/4)/1e9)
     d += 50 * np.exp(-2j*np.pi*times[:, None]*(frs[20]) - 2j*np.pi*freqs[None, :]*(dlys[20])/1e9)
-    d += 10 * ((np.random.normal(0, 1, uvd.Nfreqs * uvd.Ntimes).astype(np.complex) \
+    d += 10 * ((np.random.normal(0, 1, uvd.Nfreqs * uvd.Ntimes).astype(complex) \
          + 1j * np.random.normal(0, 1, uvd.Nfreqs * uvd.Ntimes)).reshape(uvd.Ntimes, uvd.Nfreqs))
 
     def get_snr(clean, fftax=1, avgax=0, modes=[2, 20]):
@@ -597,12 +597,12 @@ def test_vis_filter():
     freq_snr1, freq_snr2 = get_snr(d, fftax=1, avgax=0, modes=[2, 20])
     time_snr1, time_snr2 = get_snr(d, fftax=0, avgax=1, modes=[2, 20])
     # simulate some flags
-    f = np.zeros_like(d, dtype=np.bool)
+    f = np.zeros_like(d, dtype=bool)
     d[:, 20:22] += 1e3
     f[:, 20:22] = True
     d[20, :] += 1e3
     f[20, :] = True
-    w = (~f).astype(np.float)
+    w = (~f).astype(float)
     bl_len = 70.0 / 2.99e8
 
     # try passing skip_wgt
@@ -763,12 +763,12 @@ def test_fourier_filter():
     time_snr1, time_snr2 = get_snr(d, fftax=0, avgax=1, modes=[2, 20])
 
     # simulate some flags
-    f = np.zeros_like(d, dtype=np.bool)
+    f = np.zeros_like(d, dtype=bool)
     d[:, 20:22] += 1e3
     f[:, 20:22] = True
     d[20, :] += 1e3
     f[20, :] = True
-    w = (~f).astype(np.float)
+    w = (~f).astype(float)
     bl_len = dlys[nf//2+4]
     fr_len = frs[ntimes//2+4]
     # dpss filtering
@@ -1011,14 +1011,14 @@ def test_vis_clean():
     dfr, ddly = frs[1] - frs[0], dlys[1] - dlys[0]
     d = 200 * np.exp(-2j*np.pi*times[:, None]*(frs[2]+dfr/4) - 2j*np.pi*freqs[None, :]*(dlys[2]+ddly/4)/1e9)
     d += 50 * np.exp(-2j*np.pi*times[:, None]*(frs[20]) - 2j*np.pi*freqs[None, :]*(dlys[20])/1e9)
-    d += 10 * ((np.random.normal(0, 1, uvd.Nfreqs * uvd.Ntimes).astype(np.complex) \
+    d += 10 * ((np.random.normal(0, 1, uvd.Nfreqs * uvd.Ntimes).astype(complex) \
          + 1j * np.random.normal(0, 1, uvd.Nfreqs * uvd.Ntimes)).reshape(uvd.Ntimes, uvd.Nfreqs))
-    f = np.zeros_like(d, dtype=np.bool)
+    f = np.zeros_like(d, dtype=bool)
     d[:, 20:22] += 1e3
     f[:, 20:22] = True
     d[20, :] += 1e3
     f[20, :] = True
-    w = (~f).astype(np.float)
+    w = (~f).astype(float)
     bl_len = 70.0 / 2.99e8
     # here is a fourier filter implementation of clean
     mdl1, res1, info1 = dspec.fourier_filter(freqs, d, w, [0.], [bl_len],
