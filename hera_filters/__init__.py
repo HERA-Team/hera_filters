@@ -1,9 +1,6 @@
-from . import dspec
+from importlib.metadata import PackageNotFoundError, version
 
-try:
-    from importlib.metadata import PackageNotFoundError, version
-except ImportError:
-    from importlib_metadata import PackageNotFoundError, version
+from . import dspec
 
 try:
     from ._version import version as __version__
