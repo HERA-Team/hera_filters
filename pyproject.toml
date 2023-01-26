@@ -30,7 +30,8 @@ dev = [
     "pytest",
     "pytest-cov",
     "aipy>=3.0.5",
-    "pre-commit"
+    "pre-commit",
+    "pyuvdata"
 ]
 [tool.setuptools_scm]
 write_to = "hera_filters/_version.py"
