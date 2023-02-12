@@ -11,6 +11,7 @@ from warnings import warn
 from scipy.optimize import leastsq, lsq_linear
 import copy
 from scipy import linalg
+from functools import lru_cache
 
 #DEFAULT PARAMETERS FOR CLEANs
 CLEAN_DEFAULTS_1D={'tol':1e-9, 'window':'none',
@@ -2198,7 +2199,8 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
                 cache[opkey] = None
     return cache[opkey]
 
-def _calculate_amat(k, c):
+@lru_cache(maxsize=8)
+def _calculate_amat_eigenvecs(k, c):
     """
     Computes the eigenvalues and eigenvectors of the decay coefficient matrix
     used to compute prolate spheroidal wave functions. More information can be
@@ -2363,7 +2365,7 @@ def pswf_operator(
         for fn, (fw, fc) in enumerate(zip(filter_half_widths, filter_centers)):
             # Compute eigenvectors
             c = fw * np.pi * (xmax - xmin)
-            eigenvals, eigenvecs = _calculate_amat(kmax, c)
+            eigenvals, eigenvecs = _calculate_amat_eigenvecs(kmax, c)
 
             # Sort eigenvectors by largest eigenvalue
             idx = np.argsort(eigenvals)
