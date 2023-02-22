@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hera_filters"
+description = "Underlying filtering methods for 21cm analysis."
+authors = [
+    {name="HERA Team"},
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "numpy",
+    "six",
+    "scipy",
+]
+dynamic = [
+    "version",
+]
+
+
+[project.optional-dependencies]
+aipy = ["aipy>=3.0.5"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "aipy>=3.0.5",
+    "pre-commit",
+    "pyuvdata"
+]
+[tool.setuptools_scm]
+write_to = "hera_filters/_version.py"
+parentdir_prefix_version = "hera_filters-"
+fallback_version = "0.0.0"
+
+[tool.setuptools]
+packages = ["hera_filters"]

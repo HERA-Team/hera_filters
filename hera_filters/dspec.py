@@ -1,16 +1,15 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2018 The HERA Collaboration
 # Licensed under the MIT License
 
-from __future__ import print_function, division, absolute_import
-import hashlib
-import numpy as np
-from six.moves import range
-from scipy.signal import windows
-from warnings import warn
-from scipy.optimize import leastsq, lsq_linear
+
 import copy
+import hashlib
+from warnings import warn
+
+import numpy as np
 from scipy import linalg
+from scipy.optimize import leastsq, lsq_linear
+from scipy.signal import windows
 
 #DEFAULT PARAMETERS FOR CLEANs
 CLEAN_DEFAULTS_1D={'tol':1e-9, 'window':'none',
@@ -114,7 +113,7 @@ def _are_wgts_binary(wgts):
 
     Arguments:
         wgts : array-like vector containing floats
-    
+
     Returns:
         Value of True if wgts contains only 1's and 0's
     """
@@ -1197,7 +1196,7 @@ def gen_window(window, N, alpha=0.5, edgecut_low=0, edgecut_hi=0, normalization=
     w = np.zeros(N, dtype=float)
     Ncut = edgecut_low + edgecut_hi
     if Ncut >= N:
-        raise ValueError("Ncut >= N for edgecut_low {} and edgecut_hi {}".format(edgecut_low, edgecut_hi))
+        raise ValueError(f"Ncut >= N for edgecut_low {edgecut_low} and edgecut_hi {edgecut_hi}")
     if edgecut_hi > 0:
         edgecut_hi = -edgecut_hi
     else:
@@ -1232,7 +1231,7 @@ def gen_window(window, N, alpha=0.5, edgecut_low=0, edgecut_hi=0, normalization=
             # return any single-arg window from windows
             w[edgecut_low:edgecut_hi] = getattr(windows, window)(N - Ncut)
         except AttributeError:
-            raise ValueError("Didn't recognize window {}".format(window))
+            raise ValueError(f"Didn't recognize window {window}")
     if normalization == 'rms':
         w /= np.sqrt(np.mean(np.abs(w)**2.))
     if normalization == 'mean':
@@ -1563,7 +1562,7 @@ def delay_filter_leastsq(data, flags, sigma, nmax, add_noise=False,
 def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 basis_options, suppression_factors=None, hash_decimal=10,
                 method='leastsq', basis='dft', cache=None):
-    """
+    r"""
     A 1d linear-least-squares fitting function for computing models and residuals for fitting of the form
     y_model = A @ c
     where A is a design matrix encoding our choice for a basis functions
@@ -1724,7 +1723,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 warn(f"Recording skipped integration in info and setting to zero.")
                 cn_out = 0.0
                 info['skipped'] = True
-        
+
         elif method == 'leastsq':
             try:
                 res = lsq_linear(XTX, Xy)
@@ -1945,7 +1944,7 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                 method='leastsq', basis='dft', cache=None,
                 filter_dims = 1, skip_wgt=0.1, max_contiguous_edge_flags=5,
                 zero_residual_flags=True):
-    """
+    r"""
     A 1d linear-least-squares fitting function for computing models and residuals for fitting of the form
     y_model = A @ c
     where A is a design matrix encoding our choice for a basis functions
@@ -2185,7 +2184,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
         else:
             xwmat = np.conj(design_matrix.T) @ weights
             cmat = xwmat @ design_matrix
-            
+
         #should there be a conjugation!?!
         if np.linalg.cond(cmat)>=1e9:
             warn('Warning!!!!: Poorly conditioned matrix! Your linear inpainting IS WRONG!')
@@ -2202,8 +2201,8 @@ def _calculate_amat(k, c):
     """
     Computes the eigenvalues and eigenvectors of the decay coefficient matrix
     used to compute prolate spheroidal wave functions. More information can be
-    found in the following paper: 
-        
+    found in the following paper:
+
         https://www.sciencedirect.com/science/article/pii/S106352030400017X
 
     Parameters:
@@ -2278,7 +2277,7 @@ def pswf_operator(
     do not need to be equally spaced (unlike DPSS operator). Users can specify how the
     PSWF series fits are cutoff in each delay-filtering window with one (and only one)
     of two conditions: approximated eigenvalues of the sinc function fall below a thresshold (eigenval_cutoff) or
-    user specified number of PSWF terms (nterms). 
+    user specified number of PSWF terms (nterms).
 
     Paper for algorithm used to compute the prolate spheroidal wave functions can be
     found here:
@@ -2333,18 +2332,18 @@ def pswf_operator(
             "Must only provide a single series cutoff condition. %d were provided: %s "
             % (np.count_nonzero(crit_provided), str(crit_provided_name))
         )
-        
+
     opkey = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths, x=x,
                                       crit_name=crit_provided_name[0], label='pswf_operator', crit_val=tuple(crit_provided_value[0]),
                                       hash_decimal=hash_decimal, xmin=xmin, xmax=xmax)
-    
+
     if opkey not in cache:
-        # Normalize input array to -1 <= xg <= 1 unless a range is provided 
+        # Normalize input array to -1 <= xg <= 1 unless a range is provided
         if xmin is None:
             xmin = x.min()
         if xmax is None:
             xmax = x.max()
-        
+
         xg = np.copy(x)
         xg = 2 * (xg - xmin) / (xmax - xmin) - 1
 
@@ -2358,7 +2357,7 @@ def pswf_operator(
 
         # Compute associated Legendre polynomials
         polynomials = _normalized_legendre(xg, kmax)
-        
+
         amat, _nterms = [], []
         for fn, (fw, fc) in enumerate(zip(filter_half_widths, filter_centers)):
             # Compute eigenvectors
@@ -2381,16 +2380,16 @@ def pswf_operator(
             if eigenval_cutoff is not None:
                 # Get legendre polynomial at P(0)
                 poly = _normalized_legendre(np.array(0), kmax)
-                
+
                 # Evaluate PSWF a x=0
                 midpoint = poly @ eigenvecs
-                
+
                 # Compute eigenvalues
                 neven = np.arange(0, kmax, 2)
                 eigvals = np.abs(np.sqrt(2) * eigenvecs[0, neven] / midpoint[neven])
                 eigvals = (eigvals / eigvals.max()) ** 2
                 nt = np.max(neven[eigvals > eigenval_cutoff[fn]])
-                
+
                 # Truncate pswf vectors
                 pswf_vectors = pswf_vectors[:, :nt]
                 _nterms.append(nt)
@@ -2635,7 +2634,7 @@ def delay_interpolation_matrix(nchan, ndelay, wgts, fundamental_period=None, cac
         fundamental period of Fourier modes to fit too.
         this sets the resolution in Fourier space. A standard DFT has a resolution
         of 1/N_{FP} = 1/N between fourier modes so that the DFT operator is
-        D_{mn} = e^{-2 \pi i m n / N_{FP}}. fg_deconv_fundamental_period
+        D_{mn} = e^{-2 \\pi i m n / N_{FP}}. fg_deconv_fundamental_period
         is N_{FP}.
     cache: dict, optional
         optional cache holding pre-computed matrices

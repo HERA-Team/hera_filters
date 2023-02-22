@@ -1,14 +1,19 @@
-from .. import dspec
-import numpy as np, random
-import pytest
-from pyuvdata import UVData
-from ..data import DATA_PATH
 import os
-from scipy.special import eval_legendre
-import scipy.signal.windows as windows
+import random
 import warnings
+
+import numpy as np
+import pytest
+import scipy.signal.windows as windows
+from pyuvdata import UVData
+from scipy.special import eval_legendre
+
+from .. import dspec
+from ..data import DATA_PATH
+
 random.seed(0)
 import copy
+
 
 def test_wedge_width():
     # Test boundaries of delay bins
@@ -1226,7 +1231,7 @@ def test__fit_basis_1d():
         mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [10./3e8], basis_options={'eigenval_cutoff': [1e-12]},
                                 method='undefined', basis='dpss')
 
-    # Run to trigger skip 
+    # Run to trigger skip
     mod1, _, info1 = dspec._fit_basis_1d(fs, dw, np.zeros_like(dw), [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
                                 method='solve', basis='dpss')
     assert info1['skipped']
@@ -1239,7 +1244,7 @@ def test__fit_basis_1d():
     mod1, _, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
                                 method='solve', basis='dpss', cache=cache)
     mod2, _, info2 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5/50.], basis_options={'eigenval_cutoff': [1e-12]},
-                                method='solve', basis='dpss', cache=cache)                            
+                                method='solve', basis='dpss', cache=cache)
     assert np.allclose(mod1, mod2)
 
 def test_fit_basis_1d_with_missing_channels():
