@@ -119,7 +119,7 @@ def _are_wgts_binary(wgts):
     Returns:
         Value of True if wgts contains only 1's and 0's
     """
-    binary_total = np.sum(np.isclose(wgts, 0) + np.isclose(wgts, 1))
+    binary_total = np.sum(np.equal(wgts, 0)) + np.sum(np.equal(wgts, 1))
     return binary_total == np.prod(wgts.shape)
 
 def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
@@ -2199,8 +2199,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
                 cache[opkey] = None
     return cache[opkey]
 
-@lru_cache(maxsize=8)
-def _calculate_amat_eigenvecs(k, c):
+def _calculate_amat(k, c):
     """
     Computes the eigenvalues and eigenvectors of the decay coefficient matrix
     used to compute prolate spheroidal wave functions. More information can be
@@ -2365,7 +2364,7 @@ def pswf_operator(
         for fn, (fw, fc) in enumerate(zip(filter_half_widths, filter_centers)):
             # Compute eigenvectors
             c = fw * np.pi * (xmax - xmin)
-            eigenvals, eigenvecs = _calculate_amat_eigenvecs(kmax, c)
+            eigenvals, eigenvecs = _calculate_amat(kmax, c)
 
             # Sort eigenvectors by largest eigenvalue
             idx = np.argsort(eigenvals)
