@@ -355,7 +355,8 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                     ridge_alpha: float, optional
                         Regularization parameter used in ridge regression. Default is 0, if value is equal to zero, 
                         then no regularization is applied. If value is greater than zeros, ridge_alpha is used as 
-                        the regularization parameter in ridge regression. Only used in the following linear modes 
+                        the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
+                        is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes 
                         (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix).
                     zero_residual_flags : bool, optional.
                         If true, set flagged channels in the residual equal to zero.
@@ -1705,7 +1706,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
 
         if not fm_key in cache:
             XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
-            XTX.flat[::XTX.shape[0] + 1] += ridge_alpha # add regularization term
+            XTX.flat[::XTX.shape[0] + 1] *= (1 + ridge_alpha) # add regularization term
 
         Xy = np.conj(amat[mask]).T @ y[mask]
 
@@ -1744,9 +1745,9 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             raise ValueError("Provided 'method', '%s', is not in ['leastsq', 'matrix', 'solve', 'cholesky']."%(method))
     else:
         if method == 'leastsq':
-            a = np.atleast_2d(w).T * amat
+            a = np.dot((np.atleast_2d(w).T * amat).T.conj(), amat)
             try:
-                res = lsq_linear(a, w * y)
+                res = lsq_linear(a, amat.T.conj().dot(w * y))
                 cn_out = res.x
             # np.linalg.LinAlgError catches "SVD did not converge."
             # which can happen if the solution is under-constrained.
@@ -1775,7 +1776,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 L = cache[fm_key]
             else:
                 XTX = np.dot(np.conj(amat).T * w, amat)
-                XTX.flat[::XTX.shape[0] + 1] += ridge_alpha # add regularization term
+                XTX.flat[::XTX.shape[0] + 1] *= (1 + ridge_alpha) # add regularization term
                 L = linalg.lu_factor(XTX)
                 cache[fm_key] = L
 
@@ -2197,7 +2198,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
             xwmat = np.conj(design_matrix.T) @ weights
             cmat = xwmat @ design_matrix
 
-        cmat.flat[::cmat.shape[0] + 1] += ridge_alpha
+        cmat.flat[::cmat.shape[0] + 1] *= (1 + ridge_alpha)
 
         #should there be a conjugation!?!
         if np.linalg.cond(cmat)>=1e9:
