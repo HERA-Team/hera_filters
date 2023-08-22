@@ -485,7 +485,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                        raise ValueError("data must be a 1D or 2D ndarray")
                    if not ndim_wgts == ndim_data:
                        raise ValueError("Number of dimensions in weights, %d does not equal number of dimensions in data, %d!"%(ndim_wgts, ndim_data))
-                   
+
                    assert ridge_alpha >= 0.0, "ridge_alpha must be greater than or equal to zero."
                    #The core code of this method will always assume 2d data
                    if ndim_data == 1:
