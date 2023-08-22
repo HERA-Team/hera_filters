@@ -353,9 +353,9 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                         'dayenu_clean', apply dayenu filter to data. Deconvolve
                                  subtracted foregrounds with 'clean'.
                     ridge_alpha: float, optional
-                        Regularization parameter used in ridge regression. Default is 0, if value is equal to zero, 
-                        then no regularization is applied. If value is greater than zeros, ridge_alpha is used as 
-                        the regularization parameter in ridge regression. Only used in the following linear modes 
+                        Regularization parameter used in ridge regression. Default is 0, if value is equal to zero,
+                        then no regularization is applied. If value is greater than zeros, ridge_alpha is used as
+                        the regularization parameter in ridge regression. Only used in the following linear modes
                         (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix).
                     zero_residual_flags : bool, optional.
                         If true, set flagged channels in the residual equal to zero.
@@ -484,7 +484,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                        raise ValueError("data must be a 1D or 2D ndarray")
                    if not ndim_wgts == ndim_data:
                        raise ValueError("Number of dimensions in weights, %d does not equal number of dimensions in data, %d!"%(ndim_wgts, ndim_data))
-                   
+
                    assert ridge_alpha >= 0.0, "ridge_alpha must be greater than or equal to zero."
                    #The core code of this method will always assume 2d data
                    if ndim_data == 1:
