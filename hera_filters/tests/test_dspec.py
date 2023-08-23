@@ -1012,28 +1012,40 @@ def test_regularized_regression():
     w = np.ones(nfreqs)
     w[200 : 200 + int((1 / (700e-9 / 4)) / np.diff(freqs)[0] + 1)] -= 1
 
-    # Compare regularized regression to standard least squares
-    mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
-                                             mode='dpss_solve', ridge_alpha=1e-3, eigenval_cutoff=[1e-12])
-    mdl, res, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
-                                             mode='dpss_solve', eigenval_cutoff=[1e-12])
+    # Compare regularized regression to standard least squares for each dpss mode
+    mdls = []
+    for mode in ['dpss_solve', 'dpss_leastsq', 'dpss_matrix']:
+        mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
+                                                mode=mode, ridge_alpha=1e-3, eigenval_cutoff=[1e-12])
+        mdl, res, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
+                                                mode=mode, eigenval_cutoff=[1e-12])
+        mdls.append(mdl_reg)
+        # Check that the regularized regression has a smaller residual norm in the flagged region
+        assert np.linalg.norm((d - mdl_reg)[~w.astype(bool)]) < np.linalg.norm((d - mdl)[~w.astype(bool)])
 
-    # Check that the regularized regression has a smaller residual norm in the flagged region
-    assert np.linalg.norm((d - mdl_reg)[~w.astype(bool)]) < np.linalg.norm((d - mdl)[~w.astype(bool)])
+    # Check that the regularized regression models are close to each other
+    assert np.all(np.isclose(mdls[0], mdls[1]))
+    assert np.all(np.isclose(mdls[0], mdls[2]))
 
     # Check that de-meaning the data improves interpolation
     d += 20 + 20j
+    mdls = []
+    for mode in ['dpss_solve', 'dpss_leastsq', 'dpss_matrix']:
+        mdl_reg_demean, res_reg_demean, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
+                                                mode=mode, ridge_alpha=1e-3, eigenval_cutoff=[1e-12], fit_intercept=True)
+        mdls.append(mdl_reg_demean)
+        mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
+                                                mode=mode, ridge_alpha=1e-3, eigenval_cutoff=[1e-12])
+        
+        # Check that the demeaned regularized regression has a smaller residual norm in the flagged region than
+        # the non-demeaned regularized regression. This is because ridge regression reduces the amplitude of the
+        # coefficients, leading to a near-zero mean in the flagged region, which can be a poor prediction of the
+        # inpainted region given non-zero mean data.
+        assert np.linalg.norm((d - mdl_reg_demean)[~w.astype(bool)]) < np.linalg.norm((d - mdl_reg)[~w.astype(bool)])
 
-    mdl_reg_demean, res_reg_demean, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
-                                             mode='dpss_solve', ridge_alpha=1e-3, eigenval_cutoff=[1e-12], fit_intercept=True)
-    mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
-                                             mode='dpss_solve', ridge_alpha=1e-3, eigenval_cutoff=[1e-12])
-
-    # Check that the demeaned regularized regression has a smaller residual norm in the flagged region than
-    # the non-demeaned regularized regression. This is because ridge regression reduces the amplitude of the
-    # coefficients, leading to a near-zero mean in the flagged region, which can be a poor prediction of the
-    # inpainted region given non-zero mean data.
-    assert np.linalg.norm((d - mdl_reg_demean)[~w.astype(bool)]) < np.linalg.norm((d - mdl_reg)[~w.astype(bool)])
+    # Check that the regularized regression models are close to each other
+    assert np.all(np.isclose(mdls[0], mdls[1]))
+    assert np.all(np.isclose(mdls[0], mdls[2]))
 
 
 def test_vis_clean():
