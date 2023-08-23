@@ -998,7 +998,7 @@ def test_fourier_filter():
                       dft_options2_2d['fundamental_period'][1])
     assert np.isclose(info_dft['filter_params']['axis_0']['basis_options']['fundamental_period'],
                       dft_options2_2d['fundamental_period'][0])
-    
+
 def test_regularized_regression():
     nfreqs = 500
     freqs = np.linspace(50e6, 250e6, nfreqs)
@@ -1011,13 +1011,13 @@ def test_regularized_regression():
     # Create a mask to simulate missing data
     w = np.ones(nfreqs)
     w[200 : 200 + int((1 / (700e-9 / 4)) / np.diff(freqs)[0] + 1)] -= 1
-    
+
     # Compare regularized regression to standard least squares
     mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
                                              mode='dpss_solve', ridge_alpha=1e-3, eigenval_cutoff=[1e-12])
     mdl, res, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
                                              mode='dpss_solve', eigenval_cutoff=[1e-12])
-    
+
     # Check that the regularized regression has a smaller residual norm in the flagged region
     assert np.linalg.norm((d - mdl_reg)[~w.astype(bool)]) < np.linalg.norm((d - mdl)[~w.astype(bool)])
 
@@ -1028,7 +1028,7 @@ def test_regularized_regression():
                                              mode='dpss_solve', ridge_alpha=1e-3, eigenval_cutoff=[1e-12], fit_intercept=True)
     mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
                                              mode='dpss_solve', ridge_alpha=1e-3, eigenval_cutoff=[1e-12])
-    
+
     # Check that the demeaned regularized regression has a smaller residual norm in the flagged region than
     # the non-demeaned regularized regression. This is because ridge regression reduces the amplitude of the
     # coefficients, leading to a near-zero mean in the flagged region, which can be a poor prediction of the
