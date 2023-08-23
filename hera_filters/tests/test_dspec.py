@@ -1036,7 +1036,7 @@ def test_regularized_regression():
         mdls.append(mdl_reg_demean)
         mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
                                                 mode=mode, ridge_alpha=1e-3, eigenval_cutoff=[1e-12])
-        
+
         # Check that the demeaned regularized regression has a smaller residual norm in the flagged region than
         # the non-demeaned regularized regression. This is because ridge regression reduces the amplitude of the
         # coefficients, leading to a near-zero mean in the flagged region, which can be a poor prediction of the
