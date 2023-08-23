@@ -648,7 +648,11 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                    if ndim_data == 1:
                        model = model.flatten()
                        residual = residual.flatten()
+
                    if fit_intercept:
+                       if ndim_data == 1:
+                           mean = mean.flatten()
+                           
                        model += mean # add back mean of data to the model
 
                    return model, residual, info
