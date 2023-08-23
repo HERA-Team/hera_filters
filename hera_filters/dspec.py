@@ -1762,6 +1762,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     else:
         if method == 'leastsq':
             a = np.dot((np.atleast_2d(w).T * amat).T.conj(), amat)
+            a.flat[::a.shape[0] + 1] *= (1 + ridge_alpha) # add regularization term
             try:
                 res = lsq_linear(a, amat.T.conj().dot(w * y))
                 cn_out = res.x
