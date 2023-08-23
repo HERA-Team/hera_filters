@@ -358,7 +358,9 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                         then no regularization is applied. If value is greater than zeros, ridge_alpha is used as 
                         the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
                         is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes 
-                        (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix).
+                        (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
+                        for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2, 
+                        but will depend on factors such as the noise level in the data and the flagging mask.
                     fit_intercept: bool, optional
                         If true, subtracts off average of the data before fitting model to the data. 
                         Default is False. Can be useful if the data is not centered around zero and 
@@ -652,7 +654,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                    if fit_intercept:
                        if ndim_data == 1:
                            mean = mean.flatten()
-                           
+
                        model += mean # add back mean of data to the model
 
                    return model, residual, info
