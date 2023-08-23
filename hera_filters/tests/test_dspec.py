@@ -1022,7 +1022,7 @@ def test_regularized_regression():
     assert np.linalg.norm((d - mdl_reg)[~w.astype(bool)]) < np.linalg.norm((d - mdl)[~w.astype(bool)])
 
     # Check that de-meaning the data improves interpolation
-    d += 2 + 2j
+    d += 20 + 20j
 
     mdl_reg_demean, res_reg_demean, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
                                              mode='dpss_solve', ridge_alpha=1e-3, eigenval_cutoff=[1e-12], fit_intercept=True)
