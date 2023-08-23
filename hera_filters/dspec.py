@@ -271,7 +271,8 @@ def calc_width(filter_size, real_delta, nsamples):
     return (uthresh, lthresh)
 
 def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridge_alpha=0.0,
-                   filter_dims=1, skip_wgt=0.1, zero_residual_flags=True, **filter_kwargs):
+                   fit_intercept=False, filter_dims=1, skip_wgt=0.1, zero_residual_flags=True, 
+                   **filter_kwargs):
                    '''
                    A filtering function that wraps up all functionality of high_pass_fourier_filter
                    and add support for additional linear fitting options.
@@ -358,6 +359,11 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                         the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
                         is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes 
                         (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix).
+                    fit_intercept: bool, optional
+                        If true, subtracts off average of the data before fitting model to the data. 
+                        Default is False. Can be useful if the data is not centered around zero and 
+                        the user is fitting a regularized linear model (i.e if ridge_alpha > 0.0), 
+                        otherwise model will likely trend to zero in wide gaps.
                     zero_residual_flags : bool, optional.
                         If true, set flagged channels in the residual equal to zero.
                         Default is True.
@@ -543,6 +549,13 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                        else:
                            defaults = CLEAN_DEFAULTS_1D
 
+                   if fit_intercept:
+                       # subtract off mean of data
+                       print (filter_dims)
+                       mean = np.sum(data * wgts, axis=tuple(filter_dims), keepdims=True) / np.sum(wgts, axis=tuple(filter_dims), keepdims=True)
+                       data = np.copy(data) # make a copy so we don't modify the original data
+                       data -= mean
+
                    _process_filter_kwargs(filter_kwargs, defaults)
                    if 'dft' in mode:
                         fp = np.asarray(filter_kwargs['fundamental_period']).flatten()
@@ -635,6 +648,9 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                    if ndim_data == 1:
                        model = model.flatten()
                        residual = residual.flatten()
+                   if fit_intercept:
+                       model += mean # add back mean of data to the model
+
                    return model, residual, info
 
 def vis_clean(data, wgts, filter_size, real_delta, clean2d=False, tol=1e-9, window='none',
