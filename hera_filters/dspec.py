@@ -355,7 +355,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                                  subtracted foregrounds with 'clean'.
                     ridge_alpha: float, optional
                         Regularization parameter used in ridge regression. Default is 0, if value is equal to zero, 
-                        then no regularization is applied. If value is greater than zeros, ridge_alpha is used as 
+                        then no regularization is applied. If value is greater , ridge_alpha is used as 
                         the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
                         is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes 
                         (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
@@ -1657,6 +1657,14 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
                 [A^T W A]^{-1} A^T W and applying it to the y vector.
+    ridge_alpha: float, optional
+        Regularization parameter used in ridge regression. Default is 0, if value is equal to zero, 
+        then no regularization is applied. If value is greater than zero, ridge_alpha is used as 
+        the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
+        is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes 
+        (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
+        for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2, 
+        but will depend on factors such as the noise level in the data and the flagging mask.
 
 
     Returns:
@@ -2057,6 +2065,15 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
     zero_residual_flags : bool, optional.
         If true, set flagged channels in the residual equal to zero.
         Default is True.
+    ridge_alpha: float, optional
+        Regularization parameter used in ridge regression. Default is 0, if value is equal to zero, 
+        then no regularization is applied. If value is greater than zero, ridge_alpha is used as 
+        the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
+        is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes 
+        (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
+        for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2, 
+        but will depend on factors such as the noise level in the data and the flagging mask.
+
     Returns
     -------
         model: array-like
