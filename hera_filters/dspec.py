@@ -553,7 +553,6 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
 
                    if fit_intercept:
                        # subtract off mean of data
-                       print (filter_dims)
                        mean = np.sum(data * wgts, axis=tuple(filter_dims), keepdims=True) / np.sum(wgts, axis=tuple(filter_dims), keepdims=True)
                        data = np.copy(data) # make a copy so we don't modify the original data
                        data -= mean
