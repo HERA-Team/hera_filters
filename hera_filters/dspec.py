@@ -361,8 +361,8 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                         (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
                         for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2,
                         but will depend on factors such as the noise level in the data and the flagging mask. Implementation
-                        differs slightly from the standard ridge regression in that the regularization parameter is 
-                        usually added to the diagonal of the XTX matrix before the matrix is inverted. This is done to 
+                        differs slightly from the standard ridge regression in that the regularization parameter is
+                        usually added to the diagonal of the XTX matrix before the matrix is inverted. This is done to
                         attempt to standardize the regularization parameter when different weighting schemes are applied.
                         This definition of ridge regression is equivalent to the definition used in the scikit-learn
                         when using the DPSS basis and uniform unity weighting.
