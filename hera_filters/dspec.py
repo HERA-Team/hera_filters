@@ -360,7 +360,12 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                         is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes
                         (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
                         for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2,
-                        but will depend on factors such as the noise level in the data and the flagging mask.
+                        but will depend on factors such as the noise level in the data and the flagging mask. Implementation
+                        differs slightly from the standard ridge regression in that the regularization parameter is
+                        usually added to the diagonal of the XTX matrix before the matrix is inverted. This is done to
+                        attempt to standardize the regularization parameter when different weighting schemes are applied.
+                        This definition of ridge regression is equivalent to the definition used in the scikit-learn
+                        when using the DPSS basis and uniform unity weighting.
                     fit_intercept: bool, optional
                         If true, subtracts off average of the data before fitting model to the data.
                         Default is False. Can be useful if the data is not centered around zero and
@@ -513,6 +518,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                      # the transposes are undone below after filtering is complete
                      data = data.T
                      wgts = wgts.T
+
                    if 'cache' not in filter_kwargs:
                       cache = {}
                    else:
@@ -553,7 +559,10 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
 
                    if fit_intercept:
                        # subtract off mean of data
-                       mean = np.sum(data * wgts, axis=tuple(filter_dims), keepdims=True) / np.sum(wgts, axis=tuple(filter_dims), keepdims=True)
+                       if 0 in filter_dims and not filter2d:
+                           mean = np.sum(data * wgts, axis=tuple([1]), keepdims=True) / np.sum(wgts, axis=tuple([1]), keepdims=True)
+                       else:
+                           mean = np.sum(data * wgts, axis=tuple(filter_dims), keepdims=True) / np.sum(wgts, axis=tuple(filter_dims), keepdims=True)
                        data = np.copy(data) # make a copy so we don't modify the original data
                        data -= mean
 

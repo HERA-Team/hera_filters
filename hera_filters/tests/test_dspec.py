@@ -1047,6 +1047,23 @@ def test_regularized_regression():
     assert np.all(np.isclose(mdls[0], mdls[1]))
     assert np.all(np.isclose(mdls[0], mdls[2]))
 
+    # Transpose data to check filtering the other axis
+    d = np.asarray([d]).T
+    w = np.asarray([w]).T
+
+    for mode in ['dpss_solve', 'dpss_leastsq', 'dpss_matrix']:
+        mdl_reg_demean, res_reg_demean, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
+                                                mode=mode, ridge_alpha=1e-3, eigenval_cutoff=[1e-12], fit_intercept=True, filter_dims=0)
+        mdls.append(mdl_reg_demean)
+        mdl_reg, res_reg, _ = dspec.fourier_filter(freqs, d, w, [0.], [700e-9], suppression_factors=[0.],
+                                                mode=mode, ridge_alpha=1e-3, eigenval_cutoff=[1e-12], filter_dims=0)
+
+        # Check that the demeaned regularized regression has a smaller residual norm in the flagged region than
+        # the non-demeaned regularized regression. This is because ridge regression reduces the amplitude of the
+        # coefficients, leading to a near-zero mean in the flagged region, which can be a poor prediction of the
+        # inpainted region given non-zero mean data.
+        assert np.linalg.norm((d - mdl_reg_demean)[~w[:, 0].astype(bool)]) < np.linalg.norm((d - mdl_reg)[~w[:, 0].astype(bool)])
+
 
 def test_vis_clean():
     # validate that fourier_filter in various clean modes gives close values to vis_clean with equivalent parameters!
