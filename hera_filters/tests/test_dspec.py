@@ -285,6 +285,9 @@ def test_pswf_operator():
     amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9])
     amat2, ncol2 = dspec.pswf_operator(freqs, [0., 100e-9], [100e-9, 100e-9], eigenval_cutoff=[1e-9, 1e-9])
     assert sum(ncol2) == 2 * sum(ncol1)
+    # Check that values outside of xmin and xmax are set to zero
+    amat1, ncol1 = dspec.pswf_operator(freqs, [0.], [100e-9], eigenval_cutoff=[1e-9], xmin=1.475e8, xmax=1.5e8)
+    assert np.isclose(amat1[(freqs < 1.475e8) | (freqs > 1.5e8), :].sum(), 0)
 
 def test_dpss_operator():
     #test that an error is thrown when we specify more then one
