@@ -2333,7 +2333,7 @@ def _normalized_legendre(x, kmax):
 
 def pswf_operator(
     x, filter_centers, filter_half_widths, eigenval_cutoff=None, nterms=None,
-    cache=None, xmin=None, xmax=None, hash_decimal=10,
+    cache=None, xmin=None, xmax=None, hash_decimal=10
 ):
     """
     Calculates PSWF operator with multiple delay windows to fit data. Frequencies
@@ -2452,6 +2452,9 @@ def pswf_operator(
                 eigvals = np.abs(np.sqrt(2) * eigenvecs[0, neven] / midpoint[neven])
                 eigvals = (eigvals / eigvals.max()) ** 2
                 nt = np.max(neven[eigvals > eigenval_cutoff[fn]])
+
+                # If x-value is outside of the range, set the filters to zeros
+                pswf_vectors[(xg < -1) | (xg > 1)] = 0
 
                 # Truncate pswf vectors
                 pswf_vectors = pswf_vectors[:, :nt]
