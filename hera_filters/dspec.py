@@ -2364,9 +2364,11 @@ def pswf_operator(
     nterms: list of integers, optional
         integer specifying number of pswf terms to include in each delay fitting block.
     xmin: float, optional
-        Lower bound of the frequency range. If not given, will be calculate from x
+        Lower bound of the frequency range. If not given, will be calculate from x. If xmin is given and
+        the range of x is outside of the range, the filters will be set to zero for those values of x.
     xmax: float, optional
-        Upper bound of the frequency range. If not given, will be calculate from x
+        Upper bound of the frequency range. If not given, will be calculate from x. If xmax is given and
+        the range of x is outside of the range, the filters will be set to zero for those values of x.
     hash_decimal: int
         number of decimals to round for floating point dict keys.
 
