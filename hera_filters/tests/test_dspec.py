@@ -1369,3 +1369,107 @@ def test_fit_basis_2d_nanwarning():
         model, resid, info = dspec._fit_basis_2d(ts, data, wgts, [0., 10/50.], [5./50., 1./50.], basis_options=dpss_opts,
                                                  method='leastsq', basis='dpss', filter_dims=0)
         assert list(np.where([info['status']['axis_0'][i] == 'skipped' for i in range(100)])[0]) == [12]
+
+def test_separable_linear_fit_2D():
+    # test that separable linear fit works as expected.
+    ntimes, nfreqs = 100, 50
+
+    # Generate some data/flags
+    # By construction, the data is separable in the time and frequency directions
+    # and the flags are also separable. The fit should be able to recover the
+    # true data in the unflagged region.
+    rng = np.random.default_rng()
+    freq_basis, _ = dspec.dpss_operator(np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12])
+    time_basis, _ = dspec.dpss_operator(np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12])
+    time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
+    freq_flags = rng.choice([True, False], p=[0.1, 0.9], size=(1, nfreqs))
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+    flags = (time_flags | freq_flags)
+
+    # Fit the data
+    sol = dspec.separable_linear_fit_2D(
+        data=data,
+        axis_1_weights=(~time_flags[:, 0]).astype(float),
+        axis_2_weights=(~freq_flags[0]).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+    yf = time_basis.dot(sol).dot(freq_basis.T)
+
+    # Check that the fit closely matches to the data
+    np.testing.assert_allclose(data[~flags], yf[~flags])
+
+def test_sparse_linear_fit_2d():
+    # test that separable linear fit works as expected.
+    ntimes, nfreqs = 100, 50
+
+    # Generate some data/flags
+    # By construction, the data is separable in the time and frequency directions
+    # and the flags are also separable. The fit should be able to recover the
+    # true data in the unflagged region.
+    rng = np.random.default_rng()
+    freq_basis, _ = dspec.dpss_operator(np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12])
+    time_basis, _ = dspec.dpss_operator(np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12])
+    time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
+    freq_flags = rng.choice([True, False], p=[0.1, 0.9], size=(1, nfreqs))
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+    flags = (time_flags | freq_flags)
+
+    # Fit the data
+    sol = dspec.separable_linear_fit_2D(
+        data=data,
+        axis_1_weights=(~time_flags[:, 0]).astype(float),
+        axis_2_weights=(~freq_flags[0]).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+
+    sol_sparse, meta = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=(~flags).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+
+    sol_sparse_w_starting, meta_w_starting = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=(~flags).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+        x0=np.ravel(sol)
+    )
+
+    # Check that convergence was reached more quickly with a good starting point
+    assert meta_w_starting['iter_num'] < meta['iter_num']
+
+
+    # Check that the fit closely matches to the separable fit
+    np.testing.assert_allclose(sol, sol_sparse)
+
+    # Errors should be raised if the data, weights, and bases are not compatible
+    pytest.raises(
+        ValueError, 
+        dspec.sparse_linear_fit_2D, 
+        data=data, 
+        weights=(~flags).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=time_basis,
+    )
+    pytest.raises(
+        ValueError, 
+        dspec.sparse_linear_fit_2D, 
+        data=data, 
+        weights=(~flags).astype(float),
+        axis_1_basis=freq_basis,
+        axis_2_basis=freq_basis,
+    )
+    pytest.raises(
+        ValueError, 
+        dspec.sparse_linear_fit_2D, 
+        data=data, 
+        weights=(~flags).astype(float).T,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
