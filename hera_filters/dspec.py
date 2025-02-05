@@ -2811,9 +2811,9 @@ def dayenu_mat_inv(x, filter_centers, filter_half_widths,
     return sdwi_mat
 
 def _kron_matvec(
-    x: np.ndarray, 
-    weights: np.ndarray, 
-    axis_1_basis: np.ndarray, 
+    x: np.ndarray,
+    weights: np.ndarray,
+    axis_1_basis: np.ndarray,
     axis_2_basis: np.ndarray
 )-> np.ndarray:
     """
@@ -2840,20 +2840,20 @@ def _kron_matvec(
         Flattened result of size (m * n,).
     """
     i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
-    
+
     # Reshape v into (m, n) matrix using Fortran order to match vectorization
     X = x.reshape((i, j))
-    
+
     # Compute the transformation
     Y = (axis_1_basis @ X) @ axis_2_basis.T
-    
+
     # Apply the weight W and return flattened result
     return (Y * weights).ravel()
 
 def _kron_rmatvec(
-    data: np.ndarray, 
-    weights: np.ndarray, 
-    axis_1_basis: np.ndarray, 
+    data: np.ndarray,
+    weights: np.ndarray,
+    axis_1_basis: np.ndarray,
     axis_2_basis: np.ndarray
 ) -> np.ndarray:
     """
@@ -2880,13 +2880,13 @@ def _kron_rmatvec(
         Flattened result of size (i * j,).
     """
     m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
-    
+
     # Reshape u into (m, n) matrix using Fortran order and apply W
     X = (data.reshape((m, n))) * weights
-    
+
     # Compute the transformation
     Y = (axis_1_basis.T.conj() @ X) @ axis_2_basis.conj()
-    
+
     # Return flattened result
     return Y.ravel()
 
@@ -2920,7 +2920,7 @@ def sparse_linear_fit_2D(
     axis_2_basis : np.ndarray
         Basis basis along the second axis, shape (n, j).
     atol, btol : float, optional, default 1e-10
-        Stopping tolerances for `lsqr`. The algorithm terminates when the 
+        Stopping tolerances for `lsqr`. The algorithm terminates when the
         ``norm(r) <= atol * norm(A) * norm(x) + btol * norm(b)``, where A is the
         implicit Kronecker product of `axis_1_basis` and `axis_2_basis`, and b is the
         flattened `data` array, x is the solution, and r is the residual.
@@ -2959,10 +2959,10 @@ def sparse_linear_fit_2D(
     meta = {}
     # Solve the least-squares problem using LSQR
     (
-        x, 
-        meta['istop'], 
-        meta['iter_num'], 
-        *_ 
+        x,
+        meta['istop'],
+        meta['iter_num'],
+        *_
     )= sparse.linalg.lsqr(
         A=linear_operator,
         b=data.ravel(),
@@ -2987,7 +2987,7 @@ def separable_linear_fit_2D(
     """
     Solves a separable linear least-squares problem using weighted basis basis.
 
-    This function fits the input `data` using a least-squares approach with 
+    This function fits the input `data` using a least-squares approach with
     separable weighting along two axes. The solution is computed using pseudo-inverses.
 
     Parameters:

@@ -1402,8 +1402,8 @@ def test_separable_linear_fit_2D():
 
     # Errors should be raised if the data, weights, and bases are not compatible
     pytest.raises(
-        ValueError, 
-        dspec.separable_linear_fit_2D, 
+        ValueError,
+        dspec.separable_linear_fit_2D,
         data=data,
         axis_1_weights=(~time_flags[:, 0]).astype(float),
         axis_2_weights=(~freq_flags[0]).astype(float),
@@ -1412,8 +1412,8 @@ def test_separable_linear_fit_2D():
     )
 
     pytest.raises(
-        ValueError, 
-        dspec.separable_linear_fit_2D, 
+        ValueError,
+        dspec.separable_linear_fit_2D,
         data=data,
         axis_1_weights=(~time_flags[:, 0]).astype(float),
         axis_2_weights=(~freq_flags[0]).astype(float),
@@ -1471,25 +1471,25 @@ def test_sparse_linear_fit_2d():
 
     # Errors should be raised if the data, weights, and bases are not compatible
     pytest.raises(
-        ValueError, 
-        dspec.sparse_linear_fit_2D, 
-        data=data, 
+        ValueError,
+        dspec.sparse_linear_fit_2D,
+        data=data,
         weights=(~flags).astype(float),
         axis_1_basis=time_basis,
         axis_2_basis=time_basis,
     )
     pytest.raises(
-        ValueError, 
-        dspec.sparse_linear_fit_2D, 
-        data=data, 
+        ValueError,
+        dspec.sparse_linear_fit_2D,
+        data=data,
         weights=(~flags).astype(float),
         axis_1_basis=freq_basis,
         axis_2_basis=freq_basis,
     )
     pytest.raises(
-        ValueError, 
-        dspec.sparse_linear_fit_2D, 
-        data=data, 
+        ValueError,
+        dspec.sparse_linear_fit_2D,
+        data=data,
         weights=(~flags).astype(float).T,
         axis_1_basis=time_basis,
         axis_2_basis=freq_basis,
