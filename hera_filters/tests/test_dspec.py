@@ -1400,6 +1400,27 @@ def test_separable_linear_fit_2D():
     # Check that the fit closely matches to the data
     np.testing.assert_allclose(data[~flags], yf[~flags])
 
+    # Errors should be raised if the data, weights, and bases are not compatible
+    pytest.raises(
+        ValueError, 
+        dspec.separable_linear_fit_2D, 
+        data=data,
+        axis_1_weights=(~time_flags[:, 0]).astype(float),
+        axis_2_weights=(~freq_flags[0]).astype(float),
+        axis_1_basis=freq_basis,
+        axis_2_basis=freq_basis,
+    )
+
+    pytest.raises(
+        ValueError, 
+        dspec.separable_linear_fit_2D, 
+        data=data,
+        axis_1_weights=(~time_flags[:, 0]).astype(float),
+        axis_2_weights=(~freq_flags[0]).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=time_basis,
+    )
+
 def test_sparse_linear_fit_2d():
     # test that separable linear fit works as expected.
     ntimes, nfreqs = 100, 50
