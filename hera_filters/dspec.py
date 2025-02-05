@@ -7,7 +7,7 @@ import hashlib
 from warnings import warn
 
 import numpy as np
-from scipy import linalg
+from scipy import linalg, sparse
 from scipy.optimize import leastsq, lsq_linear
 from scipy.signal import windows
 
@@ -2809,3 +2809,219 @@ def dayenu_mat_inv(x, filter_centers, filter_half_widths,
     else:
         sdwi_mat = cache[filter_key]
     return sdwi_mat
+
+def _kron_matvec(
+    x: np.ndarray, 
+    weights: np.ndarray, 
+    axis_1_basis: np.ndarray, 
+    axis_2_basis: np.ndarray
+)-> np.ndarray:
+    """
+    Compute the matrix-vector product (Kronecker structured) for a given vector.
+
+    Given axis_1_basis (m x i) and axis_2_basis (n x j), this function computes:
+        Y = axis_1_basis * X * axis_2_basis^T
+    where X is the reshaped version of xs.
+
+    Parameters:
+    ----------
+    x : np.ndarray
+        Input vector of size (i * j,).
+    weights : np.ndarray
+        Weighting matrix of size (m, n), applied element-wise.
+    axis_1_basis : np.ndarray
+        Left transformation matrix of size (m, i).
+    axis_2_basis : np.ndarray
+        Right transformation matrix of size (n, j).
+
+    Returns:
+    -------
+    np.ndarray
+        Flattened result of size (m * n,).
+    """
+    i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
+    
+    # Reshape v into (m, n) matrix using Fortran order to match vectorization
+    X = x.reshape((i, j))
+    
+    # Compute the transformation
+    Y = (axis_1_basis @ X) @ axis_2_basis.T
+    
+    # Apply the weight W and return flattened result
+    return (Y * weights).ravel()
+
+def _kron_rmatvec(
+    data: np.ndarray, 
+    weights: np.ndarray, 
+    axis_1_basis: np.ndarray, 
+    axis_2_basis: np.ndarray
+) -> np.ndarray:
+    """
+    Compute the adjoint matrix-vector product (Kronecker structured).
+
+    Given axis_1_array (m x i) and axis_2_array (n x j), this function computes:
+        Y = axis_1_array^T * X * axis_2_array
+    where X is the weighted reshaped version of data * weights.
+
+    Parameters:
+    ----------
+    data : np.ndarray
+        Input vector of size (i * j,).
+    weights : np.ndarray
+        Weighting matrix of size (m, n), applied element-wise.
+    axis_1_basis : np.ndarray
+        Left transformation matrix of size (m, i).
+    axis_2_basis : np.ndarray
+        Right transformation matrix of size (n, j).
+
+    Returns:
+    -------
+    np.ndarray
+        Flattened result of size (i * j,).
+    """
+    m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
+    
+    # Reshape u into (m, n) matrix using Fortran order and apply W
+    X = (data.reshape((m, n))) * weights
+    
+    # Compute the transformation
+    Y = (axis_1_basis.T.conj() @ X) @ axis_2_basis.conj()
+    
+    # Return flattened result
+    return Y.ravel()
+
+def sparse_linear_fit_2D(
+    data: np.ndarray,
+    weights: np.ndarray,
+    axis_1_basis: np.ndarray,
+    axis_2_basis: np.ndarray,
+    atol: float = 1e-10,
+    btol: float = 1e-10,
+    iter_lim: int = 500,
+    **kwargs
+) -> np.ndarray:
+    """
+    Solves a sparse linear least-squares problem using Kronecker-structured basis.
+
+    This function fits the input `data` using a weighted least-squares approach, where
+    the design matrix is represented implicitly as the Kronecker product of `axis_1_basis`
+    and `axis_2_basis`. The solution is computed using `scipy.sparse.linalg.lsqr`. Note the
+    the convergence of the LSQR algorithm is not guaranteed for this problem, and highly
+
+
+    Parameters:
+    -----------
+    data : np.ndarray
+        A 2D array of size (m, n) representing the observed data to be fitted.
+    weights : np.ndarray
+        A weight matrix of the same shape as `data`, applied element-wise.
+    axis_1_basis : np.ndarray
+        Basis basis along the first axis, shape (m, i).
+    axis_2_basis : np.ndarray
+        Basis basis along the second axis, shape (n, j).
+    atol, btol : float, optional, default 1e-10
+        Stopping tolerances for `lsqr`. The algorithm terminates when the 
+        ``norm(r) <= atol * norm(A) * norm(x) + btol * norm(b)``, where A is the
+        implicit Kronecker product of `axis_1_basis` and `axis_2_basis`, and b is the
+        flattened `data` array, x is the solution, and r is the residual.
+    iter_lim : int, optional
+        Maximum number of iterations for `lsqr`, default is 200.
+    **kwargs : dict
+        Additional keyword arguments passed to `scipy.sparse.linalg.lsqr`.
+
+    Returns:
+    --------
+    x : np.ndarray
+        The computed least-squares solution of shape `(i, j)`.
+    meta : dict
+        Dictionary containing additional information about the solution
+        from sparse.linalg.lsqr.
+    """
+    if data.shape != weights.shape:
+        raise ValueError("Shape mismatch: `weights` must have the same shape as `data`.")
+    if data.shape[0] != axis_1_basis.shape[0]:
+        raise ValueError("Shape mismatch: `axis_1_basis` must match the first dimension of `data`.")
+    if data.shape[1] != axis_2_basis.shape[0]:
+        raise ValueError("Shape mismatch: `axis_2_basis` must match the second dimension of `data`.")
+
+    # Define the shape of the implicit A matrix (Kronecker product of basis)
+    full_operator_shape = (
+        axis_1_basis.shape[0] * axis_2_basis.shape[0],  # m * n
+        axis_1_basis.shape[-1] * axis_2_basis.shape[-1],  # i * j
+    )
+
+    # Define the implicit LinearOperator representing the Kronecker product
+    linear_operator = sparse.linalg.LinearOperator(
+        full_operator_shape,
+        matvec=lambda v: _kron_matvec(v, weights, axis_1_basis, axis_2_basis),
+        rmatvec=lambda u: _kron_rmatvec(u, weights, axis_1_basis, axis_2_basis),
+    )
+    meta = {}
+    # Solve the least-squares problem using LSQR
+    (
+        x, 
+        meta['istop'], 
+        meta['iter_num'], 
+        *_ 
+    )= sparse.linalg.lsqr(
+        A=linear_operator,
+        b=data.ravel(),
+        atol=atol,
+        btol=btol,
+        iter_lim=iter_lim,
+        **kwargs
+    )
+
+    # Reshape output
+    x = x.reshape(axis_1_basis.shape[-1], axis_2_basis.shape[-1])
+
+    return x, meta
+
+def separable_linear_fit_2D(
+    data: np.ndarray,
+    axis_1_weights: np.ndarray,
+    axis_2_weights: np.ndarray,
+    axis_1_basis: np.ndarray,
+    axis_2_basis: np.ndarray
+) -> np.ndarray:
+    """
+    Solves a separable linear least-squares problem using weighted basis basis.
+
+    This function fits the input `data` using a least-squares approach with 
+    separable weighting along two axes. The solution is computed using pseudo-inverses.
+
+    Parameters:
+    -----------
+    data : np.ndarray
+        A 2D array representing the observed data to be fitted.
+    axis_1_weights : np.ndarray
+        Weights along the first axis, shape `(m,)`.
+    axis_2_weights : np.ndarray
+        Weights along the second axis, shape `(n,)`.
+    axis_1_basis : np.ndarray
+        Basis basis along the first axis, shape `(m, i)`.
+    axis_2_basis : np.ndarray
+        Basis basis along the second axis, shape `(n, j)`.
+
+    Returns:
+    --------
+    x : np.ndarray
+        The computed least-squares solution of shape `(i, j)`.
+    """
+    if data.shape[0] != axis_1_basis.shape[0]:
+        raise ValueError("Shape mismatch: `axis_1_basis` must match the first dimension of `data`.")
+    if data.shape[1] != axis_2_basis.shape[0]:
+        raise ValueError("Shape mismatch: `axis_2_basis` must match the second dimension of `data`.")
+
+    # Compute pseudo-inverses for the weighted least-squares operators
+    axis_1_XTXinv = np.linalg.pinv((axis_1_basis.T.conj() * axis_1_weights) @ axis_1_basis)
+    axis_2_XTXinv = np.linalg.pinv((axis_2_basis.T.conj() * axis_2_weights) @ axis_2_basis)
+
+    # Compute least-squares operators
+    axis_1_operator = axis_1_XTXinv @ (axis_1_basis.T.conj() * axis_1_weights)
+    axis_2_operator = axis_2_XTXinv @ (axis_2_basis.T.conj() * axis_2_weights)
+
+    # Compute the final solution
+    x = axis_1_operator @ data @ axis_2_operator.T
+
+    return x
