@@ -2995,7 +2995,7 @@ def separable_linear_fit_2D(
     axis_2_basis: np.ndarray
 ) -> np.ndarray:
     """
-    Solves a separable linear least-squares problem using weighted basis basis.
+    Solves a separable linear least-squares problem using weighted basis.
 
     This function fits the input `data` using a least-squares approach with
     separable weighting along two axes. The solution is computed using pseudo-inverses.
