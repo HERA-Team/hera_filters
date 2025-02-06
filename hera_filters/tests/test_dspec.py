@@ -1378,7 +1378,7 @@ def test_separable_linear_fit_2D():
     # By construction, the data is separable in the time and frequency directions
     # and the flags are also separable. The fit should be able to recover the
     # true data in the unflagged region.
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(42)
     freq_basis, _ = dspec.dpss_operator(np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12])
     time_basis, _ = dspec.dpss_operator(np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12])
     time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
@@ -1429,7 +1429,7 @@ def test_sparse_linear_fit_2d():
     # By construction, the data is separable in the time and frequency directions
     # and the flags are also separable. The fit should be able to recover the
     # true data in the unflagged region.
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(42)
     freq_basis, _ = dspec.dpss_operator(np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12])
     time_basis, _ = dspec.dpss_operator(np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12])
     time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
