@@ -2842,7 +2842,7 @@ def _kron_matvec(
     """
     i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
 
-    # Reshape v into (m, n) matrix using Fortran order to match vectorization
+    # Reshape v into (m, n) matrix
     X = x.reshape((i, j))
 
     # Compute the transformation
@@ -2882,7 +2882,7 @@ def _kron_rmatvec(
     """
     m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
 
-    # Reshape u into (m, n) matrix using Fortran order and apply W
+    # Reshape u into (m, n) matrix and apply W
     X = (data.reshape((m, n))) * weights
 
     # Compute the transformation
