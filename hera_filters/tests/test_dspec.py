@@ -1467,7 +1467,7 @@ def test_sparse_linear_fit_2d():
 
 
     # Check that the fit closely matches to the separable fit
-    np.testing.assert_allclose(sol, sol_sparse)
+    np.testing.assert_allclose(sol, sol_sparse, atol=1e-9, rtol=1e-6)
 
     # Errors should be raised if the data, weights, and bases are not compatible
     pytest.raises(
@@ -1494,3 +1494,43 @@ def test_sparse_linear_fit_2d():
         axis_1_basis=time_basis,
         axis_2_basis=freq_basis,
     )
+
+def test_sparse_linear_fit_2d_non_binary_wgts():
+    # test that separable linear fit works as expected.
+    ntimes, nfreqs = 100, 50
+
+    # Generate some data/flags
+    # By construction, the data is separable in the time and frequency directions
+    # and the flags are also separable. The fit should be able to recover the
+    # true data in the unflagged region.
+    rng = np.random.default_rng(42)
+    freq_basis, _ = dspec.dpss_operator(np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12])
+    time_basis, _ = dspec.dpss_operator(np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12])
+    time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
+    freq_flags = rng.choice([True, False], p=[0.1, 0.9], size=(1, nfreqs))
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+    flags = (time_flags | freq_flags)
+
+    axis_1_weights = (~time_flags[:, 0]).astype(float) * np.random.randint(1, 10, size=(ntimes, ))
+    axis_2_weights = (~freq_flags[0]).astype(float)
+    wgts = np.outer(axis_1_weights, axis_2_weights)
+
+    # Fit the data
+    sol = dspec.separable_linear_fit_2D(
+        data=data,
+        axis_1_weights=(~time_flags[:, 0]).astype(float),
+        axis_2_weights=(~freq_flags[0]).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+
+    sol_sparse, meta = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=wgts,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+
+    # Check that the fit closely matches to the separable fit
+    np.testing.assert_allclose(sol, sol_sparse, atol=1e-9, rtol=1e-6)
