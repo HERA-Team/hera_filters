@@ -2821,7 +2821,7 @@ def _kron_matvec(
 
     Given axis_1_basis (m x i) and axis_2_basis (n x j), this function computes:
         Y = (axis_1_basis @ X @ axis_2_basis^T) * weights
-    where X is the reshaped version of xs.
+    where X is the reshaped version of x.
 
     Parameters:
     ----------
@@ -2975,7 +2975,7 @@ def sparse_linear_fit_2D(
         *_
     )= sparse.linalg.lsqr(
         A=linear_operator,
-        b=data.ravel(),
+        b=(data * weights).ravel(),
         atol=atol,
         btol=btol,
         iter_lim=iter_lim,
