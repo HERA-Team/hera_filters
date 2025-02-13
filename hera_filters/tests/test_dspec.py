@@ -1513,7 +1513,7 @@ def test_sparse_linear_fit_2d_non_binary_wgts():
     flags = (time_flags | freq_flags)
 
     # Generate separable, non-binary weights
-    axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.randint(1, 10, size=(ntimes, ))
+    axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,))
     axis_2_weights = (~freq_flags[0]).astype(float)
     wgts = np.outer(axis_1_weights, axis_2_weights)
 
