@@ -1535,3 +1535,58 @@ def test_sparse_linear_fit_2d_non_binary_wgts():
 
     # Check that the fit closely matches to the separable fit
     np.testing.assert_allclose(sol, sol_sparse, atol=1e-9, rtol=1e-6)
+
+def test_precondition_sparse_solver():
+    # test that separable linear fit works as expected.
+    ntimes, nfreqs = 100, 50
+
+    # Generate some data/flags
+    # By construction, the data is separable in the time and frequency directions
+    # and the flags are also separable. The fit should be able to recover the
+    # true data in the unflagged region.
+    rng = np.random.default_rng(42)
+    freq_basis, _ = dspec.dpss_operator(np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12])
+    time_basis, _ = dspec.dpss_operator(np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12])
+    time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
+    freq_flags = rng.choice([True, False], p=[0.1, 0.9], size=(1, nfreqs))
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+    freqs = np.linspace(100e6, 200e6, nfreqs)
+
+    # Generate separable, non-binary weights
+    axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,))
+    axis_2_weights = (~freq_flags[0]).astype(float)
+    wgts = np.outer(axis_1_weights, axis_2_weights)
+    
+    # Add frequency dependence to the weights to make the problem more ill-conditioned
+    wgts *= (freqs / 150e6) ** -3.5
+
+    # Fit the data
+    sol = dspec.separable_linear_fit_2D(
+        data=data,
+        axis_1_weights=(~time_flags[:, 0]).astype(float),
+        axis_2_weights=(~freq_flags[0]).astype(float),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+
+    sol_sparse, meta = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=wgts,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+        precondition_solver=False
+    )
+
+    sol_sparse_precond, meta_precond = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=wgts,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+        precondition_solver=True
+    )
+
+    # Check that the fit closely matches to the separable fit
+    np.testing.assert_allclose(sol, sol_sparse, atol=1e-8, rtol=1e-6)
+    np.testing.assert_allclose(sol, sol_sparse_precond, atol=1e-8, rtol=1e-6)
+    np.testing.assert_array_less(meta_precond['iter_num'], meta['iter_num'])
