@@ -2935,8 +2935,8 @@ def sparse_linear_fit_2D(
         are frequency or time dependent and are either very large or very small, or when
         the basis matrices are ill-conditioned due to large stretches of zeros.
         The preconditioner is computed using the the inverse of the regularized Gramian
-        matrix of the basis matrices. Prior computing the inverse, the eigenvalues of the
-        Gramian matrix are regularized by adding a small value proportional to the smallest
+        matrix (X^T W X) of the basis matrices. Prior to computing the inverse, the eigenvalues 
+        of the Gramian matrix are regularized by adding a small value proportional to the smallest
         eigenvalue. This helps to stabilize the computation of the inverse. The regularization
         factor is computed as the minimum eigenvalue of the Gramian matrix multiplied by the
         `eig_scaling_factor` parameter.
@@ -2981,7 +2981,7 @@ def sparse_linear_fit_2D(
     if precondition_solver:
         # Compute separate preconditioners for the two axes
         # Start by computing separable weights for the two axes
-        u, s, v = np.linalg.svd(weights, full_matrices=False)
+        u, s, v = sparse.linalg.svd(weights, k=1)
         axis_1_wgts = np.abs(u[:, 0] * np.sqrt(s[0]))
         axis_2_wgts = np.abs(v[0] * np.sqrt(s[0]))
 
@@ -2989,7 +2989,7 @@ def sparse_linear_fit_2D(
         XTX_axis_1 = np.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
         eigenval, _ = np.linalg.eig(XTX_axis_1)
         axis_1_lambda = np.min(
-            eigenval[eigenval.real > np.finfo(eigenval.dtype).eps] * eig_scaling_factor
+            eigenval[eigenval.real > np.finfo(eigenval.dtype).eps].real * eig_scaling_factor
         )
         axis_1_pcond = np.linalg.pinv(
             XTX_axis_1 + np.eye(XTX_axis_1.shape[0]) * axis_1_lambda
@@ -2999,7 +2999,7 @@ def sparse_linear_fit_2D(
         XTX_axis_2 = np.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
         eigenval, _ = np.linalg.eig(XTX_axis_2)
         axis_2_lambda = np.min(
-            eigenval[eigenval.real > np.finfo(eigenval.dtype).eps] * eig_scaling_factor
+            eigenval[eigenval.real > np.finfo(eigenval.dtype).eps].real * eig_scaling_factor
         )
         axis_2_pcond = np.linalg.pinv(
             XTX_axis_2 + np.eye(XTX_axis_2.shape[0]) * axis_2_lambda
