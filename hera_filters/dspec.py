@@ -2933,11 +2933,11 @@ def sparse_linear_fit_2D(
         If True, the solver will apply a preconditioner to the basis matrices before
         solving the least-squares problem. This option is useful when the input weights
         are frequency or time dependent and are either very large or very small, or when
-        the basis matrices are ill-conditioned due to large stretches of zeros. 
-        The preconditioner is computed using the the inverse of the regularized Gramian 
-        matrix of the basis matrices. Prior computing the inverse, the eigenvalues of the 
-        Gramian matrix are regularized by adding a small value proportional to the smallest 
-        eigenvalue. This helps to stabilize the computation of the inverse. The regularization 
+        the basis matrices are ill-conditioned due to large stretches of zeros.
+        The preconditioner is computed using the the inverse of the regularized Gramian
+        matrix of the basis matrices. Prior computing the inverse, the eigenvalues of the
+        Gramian matrix are regularized by adding a small value proportional to the smallest
+        eigenvalue. This helps to stabilize the computation of the inverse. The regularization
         factor is computed as the minimum eigenvalue of the Gramian matrix multiplied by the
         `eig_scaling_factor` parameter.
     eig_scaling_factor : float, optional, default 1e-1
@@ -2994,7 +2994,7 @@ def sparse_linear_fit_2D(
         axis_1_pcond = np.linalg.pinv(
             XTX_axis_1 + np.eye(XTX_axis_1.shape[0]) * axis_1_lambda
         )
-        
+
         # Compute the preconditioner for the second axis
         XTX_axis_2 = np.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
         eigenval, _ = np.linalg.eig(XTX_axis_2)

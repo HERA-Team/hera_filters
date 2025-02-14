@@ -1557,7 +1557,7 @@ def test_precondition_sparse_solver():
     axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,))
     axis_2_weights = (~freq_flags[0]).astype(float)
     wgts = np.outer(axis_1_weights, axis_2_weights)
-    
+
     # Add frequency dependence to the weights to make the problem more ill-conditioned
     wgts *= (freqs / 150e6) ** -3.5
 
