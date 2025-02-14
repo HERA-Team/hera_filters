@@ -2931,12 +2931,14 @@ def sparse_linear_fit_2D(
         Maximum number of iterations for `lsqr`, default is None
     precondition_solver : bool, optional, default False
         If True, the solver will apply a preconditioner to the basis matrices before
-        solving the least-squares problem. The preconditioner is computed using the
-        the inverse of the regularized Gramian matrix of the basis matrices. Prior
-        computing the inverse, the eigenvalues of the Gramian matrix are regularized
-        by adding a small value proportional to the smallest eigenvalue. This helps
-        to stabilize the computation of the inverse. The regularization factor is
-        computed as the minimum eigenvalue of the Gramian matrix multiplied by the
+        solving the least-squares problem. This option is useful when the input weights
+        are frequency or time dependent and are either very large or very small, or when
+        the basis matrices are ill-conditioned due to large stretches of zeros. 
+        The preconditioner is computed using the the inverse of the regularized Gramian 
+        matrix of the basis matrices. Prior computing the inverse, the eigenvalues of the 
+        Gramian matrix are regularized by adding a small value proportional to the smallest 
+        eigenvalue. This helps to stabilize the computation of the inverse. The regularization 
+        factor is computed as the minimum eigenvalue of the Gramian matrix multiplied by the
         `eig_scaling_factor` parameter.
     eig_scaling_factor : float, optional, default 1e-1
         Regularization factor for the eigenvalues of the Gramian matrix. The factor
