@@ -2987,7 +2987,7 @@ def sparse_linear_fit_2D(
 
         # Compute the preconditioner for the first axis
         XTX_axis_1 = np.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
-        eigenval = sparse.linalg.eigs(XTX_axis_1, k=1, which='SR', return_eigenvectors=False) 
+        eigenval = sparse.linalg.eigs(XTX_axis_1, k=1, which='SR', return_eigenvectors=False)
         axis_1_lambda = eigenval.real * eig_scaling_factor
         axis_1_pcond = np.linalg.pinv(
             XTX_axis_1 + np.eye(XTX_axis_1.shape[0]) * axis_1_lambda
@@ -2995,7 +2995,7 @@ def sparse_linear_fit_2D(
 
         # Compute the preconditioner for the second axis
         XTX_axis_2 = np.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
-        eigenval = sparse.linalg.eigs(XTX_axis_2, k=1, which='SR', return_eigenvectors=False) 
+        eigenval = sparse.linalg.eigs(XTX_axis_2, k=1, which='SR', return_eigenvectors=False)
         axis_2_lambda = eigenval.real * eig_scaling_factor
         axis_2_pcond = np.linalg.pinv(
             XTX_axis_2 + np.eye(XTX_axis_2.shape[0]) * axis_2_lambda
