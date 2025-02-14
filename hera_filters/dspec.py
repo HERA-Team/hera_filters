@@ -2899,6 +2899,8 @@ def sparse_linear_fit_2D(
     atol: float = 1e-10,
     btol: float = 1e-10,
     iter_lim: int = None,
+    precondition_solver: bool = False,
+    eig_scaling_factor: float = 1e-1,
     **kwargs
 ) -> np.ndarray:
     """
@@ -2927,6 +2929,20 @@ def sparse_linear_fit_2D(
         flattened `data` array, x is the solution, and r is the residual.
     iter_lim : int, optional
         Maximum number of iterations for `lsqr`, default is None
+    precondition_solver : bool, optional, default False
+        If True, the solver will apply a preconditioner to the basis matrices before
+        solving the least-squares problem. The preconditioner is computed using the
+        the inverse of the regularized Gramian matrix of the basis matrices. Prior
+        computing the inverse, the eigenvalues of the Gramian matrix are regularized
+        by adding a small value proportional to the smallest eigenvalue. This helps
+        to stabilize the computation of the inverse. The regularization factor is
+        computed as the minimum eigenvalue of the Gramian matrix multiplied by the
+        `eig_scaling_factor` parameter.
+    eig_scaling_factor : float, optional, default 1e-1
+        Regularization factor for the eigenvalues of the Gramian matrix. The factor
+        is computed as the minimum eigenvalue of the Gramian matrix multiplied by
+        `eig_scaling_factor`. Reasonable values are typically in the range of 1e-1
+        to 1e-3.
     **kwargs : dict
         Additional keyword arguments passed to `scipy.sparse.linalg.lsqr`.
 
@@ -2960,6 +2976,36 @@ def sparse_linear_fit_2D(
         axis_1_basis.shape[-1] * axis_2_basis.shape[-1],  # i * j
     )
 
+    if precondition_solver:
+        # Compute separate preconditioners for the two axes
+        # Start by computing separable weights for the two axes
+        u, s, v = np.linalg.svd(weights, full_matrices=False)
+        axis_1_wgts = np.abs(u[:, 0] * np.sqrt(s[0]))
+        axis_2_wgts = np.abs(v[0] * np.sqrt(s[0]))
+
+        # Compute the preconditioner for the first axis
+        XTX_axis_1 = np.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
+        eigenval, _ = np.linalg.eig(XTX_axis_1)
+        axis_1_lambda = np.min(
+            eigenval[eigenval.real > np.finfo(eigenval.dtype).eps] * eig_scaling_factor
+        )
+        axis_1_pcond = np.linalg.pinv(
+            XTX_axis_1 + np.eye(XTX_axis_1.shape[0]) * axis_1_lambda
+        )
+        
+        # Compute the preconditioner for the second axis
+        XTX_axis_2 = np.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
+        eigenval, _ = np.linalg.eig(XTX_axis_2)
+        axis_2_lambda = np.min(
+            eigenval[eigenval.real > np.finfo(eigenval.dtype).eps] * eig_scaling_factor
+        )
+        axis_2_pcond = np.linalg.pinv(
+            XTX_axis_2 + np.eye(XTX_axis_2.shape[0]) * axis_2_lambda
+        )
+
+        axis_1_basis = np.dot(axis_1_basis, axis_1_pcond)
+        axis_2_basis = np.dot(axis_2_basis, axis_2_pcond)
+
     # Define the implicit LinearOperator representing the Kronecker product
     linear_operator = sparse.linalg.LinearOperator(
         full_operator_shape,
@@ -2984,6 +3030,9 @@ def sparse_linear_fit_2D(
 
     # Reshape output
     x = x.reshape(axis_1_basis.shape[-1], axis_2_basis.shape[-1])
+
+    if precondition_solver:
+        x = np.dot(axis_1_pcond, x).dot(axis_2_pcond)
 
     return x, meta
 
