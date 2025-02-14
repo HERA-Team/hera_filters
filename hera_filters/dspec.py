@@ -2935,7 +2935,7 @@ def sparse_linear_fit_2D(
         are frequency or time dependent and are either very large or very small, or when
         the basis matrices are ill-conditioned due to large stretches of zeros.
         The preconditioner is computed using the the inverse of the regularized Gramian
-        matrix (X^T W X) of the basis matrices. Prior to computing the inverse, the eigenvalues 
+        matrix (X^T W X) of the basis matrices. Prior to computing the inverse, the eigenvalues
         of the Gramian matrix are regularized by adding a small value proportional to the smallest
         eigenvalue. This helps to stabilize the computation of the inverse. The regularization
         factor is computed as the minimum eigenvalue of the Gramian matrix multiplied by the
