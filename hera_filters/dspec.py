@@ -2981,7 +2981,7 @@ def sparse_linear_fit_2D(
     if precondition_solver:
         # Compute separate preconditioners for the two axes
         # Start by computing separable weights for the two axes
-        u, s, v = sparse.linalg.svd(weights, k=1)
+        u, s, v = sparse.linalg.svds(weights, k=1)
         axis_1_wgts = np.abs(u[:, 0] * np.sqrt(s[0]))
         axis_2_wgts = np.abs(v[0] * np.sqrt(s[0]))
 
