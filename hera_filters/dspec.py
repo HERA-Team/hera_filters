@@ -2981,14 +2981,15 @@ def sparse_linear_fit_2D(
     if precondition_solver:
         # Compute separate preconditioners for the two axes
         # Start by computing separable weights for the two axes
-        axis_1_wgts = np.nanmean(
-            np.where(weights == 0, np.nan, weights), 
-            axis=1, keepdims=True
-        )
-        axis_2_wgts = np.nanmean(
-            np.where(weights == 0, np.nan, weights / axis_1_wgts), 
-            axis=0, keepdims=True
-        )
+        with np.errstate(invalid='ignore'):
+            axis_1_wgts = np.nanmean(
+                np.where(weights == 0, np.nan, weights), 
+                axis=1, keepdims=True
+            )
+            axis_2_wgts = np.nanmean(
+                np.where(weights == 0, np.nan, weights / axis_1_wgts), 
+                axis=0, keepdims=True
+            )
         axis_1_wgts[~np.isfinite(axis_1_wgts)] = 0.0
         axis_2_wgts[~np.isfinite(axis_2_wgts)] = 0.0
         axis_1_wgts = np.squeeze(axis_1_wgts)
