@@ -2900,7 +2900,7 @@ def sparse_linear_fit_2D(
     btol: float = 1e-10,
     iter_lim: int = None,
     precondition_solver: bool = False,
-    eig_scaling_factor: float = 1e-2,
+    eigenspec_threshold: float = 1e-3,
     **kwargs
 ) -> np.ndarray:
     """
@@ -2936,15 +2936,15 @@ def sparse_linear_fit_2D(
         the basis matrices are ill-conditioned due to large stretches of zeros.
         The preconditioner is computed using the the inverse of the regularized Gramian
         matrix (X^T W X) of the basis matrices. Prior to computing the inverse, the eigenvalues
-        of the Gramian matrix are regularized by adding a small value proportional to the largest
-        eigenvalue. This helps to stabilize the computation of the inverse. The regularization
-        factor is computed as the minimum eigenvalue of the Gramian matrix multiplied by the
-        `eig_scaling_factor` parameter.
-    eig_scaling_factor : float, optional, default 1e-1
-        Regularization factor for the eigenvalues of the Gramian matrix. The factor
-        is computed as the minimum eigenvalue of the Gramian matrix multiplied by
-        `eig_scaling_factor`. Reasonable values are typically in the range of 1e-1
-        to 1e-3.
+        of the Gramian matrix are regularized by adding a small value to the diagonal. This
+        value is calculated by computing the cumulative sum of the eigenvalues and selecting
+        the smallest value such that the cumulative sum of the largest eigenvalues is less than 
+        1 - `eigenspec_threshold`. This helps to stabilize the computation of the inverse.
+    eigenspec_threshold : float, optional, default 1e-3
+        Regularization parameters for the eigenvalues of the Gramian matrix. This parameter
+        is used to compute the smallest value to add to the diagonal of the Gramian matrix
+        such that the cumulative sum of the largest eigenvalues is less than 1 - `eigenspec_threshold`.
+        This effectively sets the threshold for the smallest eigenvalue to include in the inverse.
     **kwargs : dict
         Additional keyword arguments passed to `scipy.sparse.linalg.lsqr`.
 
@@ -2998,16 +2998,22 @@ def sparse_linear_fit_2D(
 
         # Compute the preconditioner for the first axis
         XTX_axis_1 = np.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
-        eigenval = sparse.linalg.eigs(XTX_axis_1, k=1, which='LM', return_eigenvectors=False)
-        axis_1_lambda = np.abs(eigenval) * eig_scaling_factor
+        eigenvals, _ = np.linalg.eigh(XTX_axis_1)
+        eigenvals = eigenvals[np.argsort(eigenvals)[::-1]]
+        axis_1_lambda = eigenvals[
+            np.max(np.where(np.cumsum(eigenvals) / np.sum(eigenvals) < (1 - eigenspec_threshold)))
+        ]
         axis_1_pcond = np.linalg.pinv(
             XTX_axis_1 + np.eye(XTX_axis_1.shape[0]) * axis_1_lambda
         )
 
         # Compute the preconditioner for the second axis
         XTX_axis_2 = np.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
-        eigenval = sparse.linalg.eigs(XTX_axis_2, k=1, which='LM', return_eigenvectors=False)
-        axis_2_lambda = np.abs(eigenval) * eig_scaling_factor
+        eigenvals, _ = np.linalg.eigh(XTX_axis_2)
+        eigenvals = eigenvals[np.argsort(eigenvals)[::-1]]
+        axis_2_lambda = eigenvals[
+            np.max(np.where(np.cumsum(eigenvals) / np.sum(eigenvals) < (1 - eigenspec_threshold)))
+        ]
         axis_2_pcond = np.linalg.pinv(
             XTX_axis_2 + np.eye(XTX_axis_2.shape[0]) * axis_2_lambda
         )
