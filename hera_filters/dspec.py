@@ -2900,7 +2900,7 @@ def sparse_linear_fit_2D(
     btol: float = 1e-10,
     iter_lim: int = None,
     precondition_solver: bool = False,
-    eig_scaling_factor: float = 1e-1,
+    eig_scaling_factor: float = 1e-2,
     **kwargs
 ) -> np.ndarray:
     """
