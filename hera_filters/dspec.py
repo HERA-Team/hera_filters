@@ -2936,7 +2936,7 @@ def sparse_linear_fit_2D(
         the basis matrices are ill-conditioned due to large stretches of zeros.
         The preconditioner is computed using the the inverse of the regularized Gramian
         matrix (X^T W X) of the basis matrices. Prior to computing the inverse, the eigenvalues
-        of the Gramian matrix are regularized by adding a small value proportional to the smallest
+        of the Gramian matrix are regularized by adding a small value proportional to the largest
         eigenvalue. This helps to stabilize the computation of the inverse. The regularization
         factor is computed as the minimum eigenvalue of the Gramian matrix multiplied by the
         `eig_scaling_factor` parameter.
@@ -2981,13 +2981,23 @@ def sparse_linear_fit_2D(
     if precondition_solver:
         # Compute separate preconditioners for the two axes
         # Start by computing separable weights for the two axes
-        u, s, v = sparse.linalg.svds(weights, k=1)
-        axis_1_wgts = np.abs(u[:, 0] * np.sqrt(s[0]))
-        axis_2_wgts = np.abs(v[0] * np.sqrt(s[0]))
+        axis_1_wgts = np.nanmean(
+            np.where(weights == 0, np.nan, weights), 
+            axis=1, keepdims=True
+        )
+        axis_2_wgts = np.nanmean(
+            np.where(weights == 0, np.nan, weights / axis_1_wgts), 
+            axis=0, keepdims=True
+        )
+        axis_1_wgts[~np.isfinite(axis_1_wgts)] = 0.0
+        axis_2_wgts[~np.isfinite(axis_2_wgts)] = 0.0
+        axis_1_wgts = np.squeeze(axis_1_wgts)
+        axis_2_wgts = np.squeeze(axis_2_wgts)
+
 
         # Compute the preconditioner for the first axis
         XTX_axis_1 = np.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
-        eigenval = sparse.linalg.eigs(XTX_axis_1, k=1, which='SM', return_eigenvectors=False)
+        eigenval = sparse.linalg.eigs(XTX_axis_1, k=1, which='LM', return_eigenvectors=False)
         axis_1_lambda = np.abs(eigenval) * eig_scaling_factor
         axis_1_pcond = np.linalg.pinv(
             XTX_axis_1 + np.eye(XTX_axis_1.shape[0]) * axis_1_lambda
@@ -2995,7 +3005,7 @@ def sparse_linear_fit_2D(
 
         # Compute the preconditioner for the second axis
         XTX_axis_2 = np.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
-        eigenval = sparse.linalg.eigs(XTX_axis_2, k=1, which='SM', return_eigenvectors=False)
+        eigenval = sparse.linalg.eigs(XTX_axis_2, k=1, which='LM', return_eigenvectors=False)
         axis_2_lambda = np.abs(eigenval) * eig_scaling_factor
         axis_2_pcond = np.linalg.pinv(
             XTX_axis_2 + np.eye(XTX_axis_2.shape[0]) * axis_2_lambda
