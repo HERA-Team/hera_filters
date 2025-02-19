@@ -2938,7 +2938,7 @@ def sparse_linear_fit_2D(
         matrix (X^T W X) of the basis matrices. Prior to computing the inverse, the eigenvalues
         of the Gramian matrix are regularized by adding a small value to the diagonal. This
         value is calculated by computing the cumulative sum of the eigenvalues and selecting
-        the smallest value such that the cumulative sum of the largest eigenvalues is less than 
+        the smallest value such that the cumulative sum of the largest eigenvalues is less than
         1 - `eigenspec_threshold`. This helps to stabilize the computation of the inverse.
     eigenspec_threshold : float, optional, default 1e-3
         Regularization parameters for the eigenvalues of the Gramian matrix. This parameter
@@ -2983,11 +2983,11 @@ def sparse_linear_fit_2D(
         # Start by computing separable weights for the two axes
         with np.errstate(invalid='ignore'):
             axis_1_wgts = np.nanmean(
-                np.where(weights == 0, np.nan, weights), 
+                np.where(weights == 0, np.nan, weights),
                 axis=1, keepdims=True
             )
             axis_2_wgts = np.nanmean(
-                np.where(weights == 0, np.nan, weights / axis_1_wgts), 
+                np.where(weights == 0, np.nan, weights / axis_1_wgts),
                 axis=0, keepdims=True
             )
         axis_1_wgts[~np.isfinite(axis_1_wgts)] = 0.0
