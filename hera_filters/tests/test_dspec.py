@@ -78,6 +78,10 @@ def test_are_wgts_binary():
     wgts = np.random.uniform(0, 1, size=100)
     assert not dspec._are_wgts_binary(wgts)
 
+    # Binary weights array plus some small number should return False
+    wgts = np.random.choice([0, 1], size=100) + 1e-12
+    assert not dspec._are_wgts_binary(wgts)
+
 def test_delay_filter_2D():
     NCHAN = 128
     NTIMES = 10

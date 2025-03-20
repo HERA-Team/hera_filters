@@ -117,8 +117,7 @@ def _are_wgts_binary(wgts):
     Returns:
         Value of True if wgts contains only 1's and 0's
     """
-    binary_total = np.sum(np.isclose(wgts, 0) + np.isclose(wgts, 1))
-    return binary_total == np.prod(wgts.shape)
+    return np.all((wgts == 0) | (wgts == 1))
 
 def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     """If possible, place data on a uniformly spaced grid.
