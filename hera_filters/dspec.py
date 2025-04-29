@@ -1,7 +1,7 @@
 # Copyright (c) 2018 The HERA Collaboration
 # Licensed under the MIT License
 # from .backend import arraylib as xp, sparse_backend as sp, linear_operator as LinearOperator
-import .backend as backend
+from . import backend
 
 import copy
 import hashlib
