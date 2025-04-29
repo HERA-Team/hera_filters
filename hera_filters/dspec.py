@@ -3040,7 +3040,7 @@ def sparse_linear_fit_2D(
         meta['istop'],
         meta['iter_num'],
         *_
-    )= sp.linalg.lsmr(
+    ) = sp.linalg.lsmr(
         A=linear_operator,
         b=(data * weights).ravel(),
         atol=atol,
