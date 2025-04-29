@@ -3033,8 +3033,14 @@ def sparse_linear_fit_2D(
         matvec=lambda v: _kron_matvec(v, weights, axis_1_basis, axis_2_basis),
         rmatvec=lambda u: _kron_rmatvec(u, weights, axis_1_basis, axis_2_basis),
     )
+
+    # Minimum number of iterations for LSMR
+    # If not provided, set to twice the number of parameters
+    if iter_lim is None:
+        iter_lim = linear_operator.shape[1] * 2
+
     meta = {}
-    # Solve the least-squares problem using LSQR
+    # Solve the least-squares problem using LSMR
     (
         x,
         meta['istop'],
