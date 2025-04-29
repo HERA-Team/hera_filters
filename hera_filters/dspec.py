@@ -3011,9 +3011,8 @@ def sparse_linear_fit_2D(
         XTX_axis_1 = xp.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
         eigenvals, _ = xp.linalg.eigh(XTX_axis_1)
         eigenvals = eigenvals[xp.argsort(eigenvals)[::-1]]
-        axis_1_lambda = eigenvals[
-            xp.max(xp.where(xp.cumsum(eigenvals) / xp.sum(eigenvals) < (1 - eigenspec_threshold)))
-        ]
+        eigenval_frac = xp.cumsum(eigenvals) / eigenvals.sum()
+        axis_1_lambda = eigenvals[eigenval_frac < (1 - eigenspec_threshold)][-1]
         axis_1_pcond = xp.linalg.pinv(
             XTX_axis_1 + xp.eye(XTX_axis_1.shape[0]) * axis_1_lambda
         )
@@ -3022,9 +3021,8 @@ def sparse_linear_fit_2D(
         XTX_axis_2 = xp.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
         eigenvals, _ = xp.linalg.eigh(XTX_axis_2)
         eigenvals = eigenvals[xp.argsort(eigenvals)[::-1]]
-        axis_2_lambda = eigenvals[
-            xp.max(xp.where(xp.cumsum(eigenvals) / xp.sum(eigenvals) < (1 - eigenspec_threshold)))
-        ]
+        eigenval_frac = xp.cumsum(eigenvals) / eigenvals.sum()
+        axis_2_lambda = eigenvals[eigenval_frac < (1 - eigenspec_threshold)][-1]
         axis_2_pcond = xp.linalg.pinv(
             XTX_axis_2 + xp.eye(XTX_axis_2.shape[0]) * axis_2_lambda
         )
