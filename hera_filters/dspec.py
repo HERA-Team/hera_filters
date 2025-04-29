@@ -1,8 +1,6 @@
 # Copyright (c) 2018 The HERA Collaboration
 # Licensed under the MIT License
 # from .backend import arraylib as xp, sparse_backend as sp, linear_operator as LinearOperator
-from . import backend
-
 import copy
 import hashlib
 from warnings import warn
@@ -11,6 +9,8 @@ import numpy as np
 from scipy import linalg
 from scipy.optimize import leastsq, lsq_linear
 from scipy.signal import windows
+
+from . import backend
 
 #DEFAULT PARAMETERS FOR CLEANs
 CLEAN_DEFAULTS_1D={'tol':1e-9, 'window':'none',
