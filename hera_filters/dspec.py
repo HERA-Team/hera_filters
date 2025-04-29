@@ -3045,7 +3045,7 @@ def sparse_linear_fit_2D(
         b=(data * weights).ravel(),
         atol=atol,
         btol=btol,
-        iter_lim=iter_lim,
+        maxiter=iter_lim,
         **kwargs
     )
 
