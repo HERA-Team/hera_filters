@@ -1,6 +1,7 @@
 # Copyright (c) 2018 The HERA Collaboration
 # Licensed under the MIT License
-from .backend import arraylib as xp, sparse_backend as sp, linear_operator as LinearOperator
+# from .backend import arraylib as xp, sparse_backend as sp, linear_operator as LinearOperator
+import .backend as backend
 
 import copy
 import hashlib
@@ -2955,6 +2956,11 @@ def sparse_linear_fit_2D(
         Dictionary containing additional information about the solution
         from sparse.linalg.lsqr.
     """
+    # Import backend functions
+    xp = backend.arraylib
+    sp = backend.sparse_backend
+    LinearOperator = backend.linear_operator
+
     # Coerce all inputs to correct array type
     data = xp.asarray(data)
     weights = xp.asarray(weights)
