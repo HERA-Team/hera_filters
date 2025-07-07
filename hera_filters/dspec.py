@@ -1676,6 +1676,13 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
                 [A^T W A]^{-1} A^T W and applying it to the y vector.
+    cache: dictionary, optional
+        dictionary for caching intermediate results. If None, no caching is done.
+        If provided, the cache will be used to store intermediate results such as
+        the covariance matrix and the fitting matrix.
+    cache_solver_products: bool, optional
+        If True, the cache will be used to store intermediate results such as the covariance matrix and the fitting matrix.
+        If False, only the basis operator will be cached. Default is True.
     ridge_alpha: float, optional
         Regularization parameter used in ridge regression. Default is 0, if value is equal to zero,
         then no regularization is applied. If value is greater than zero, ridge_alpha is used as
