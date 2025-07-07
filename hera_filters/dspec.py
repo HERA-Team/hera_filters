@@ -1608,7 +1608,7 @@ def delay_filter_leastsq(data, flags, sigma, nmax, add_noise=False,
 
 def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 basis_options, suppression_factors=None, hash_decimal=10,
-                method='leastsq', basis='dft', cache=None, cache_solver_products=True, 
+                method='leastsq', basis='dft', cache=None, cache_solver_products=True,
                 ridge_alpha=0.0
     ):
     r"""
@@ -1708,7 +1708,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     """
     if cache is None:
         cache = {}
-    
+
     basis_cache = cache # Always use the same cache for basis operators
 
     # Start a solver cache for storing intermediate results
@@ -2159,7 +2159,7 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                                             filter_half_widths=filter_half_widths[1],
                                             suppression_factors=suppression_factors[1],
                                             basis_options=basis_options[1], method=method,
-                                            basis=basis, cache=cache, cache_solver_products=cache_solver_products, 
+                                            basis=basis, cache=cache, cache_solver_products=cache_solver_products,
                                             ridge_alpha=ridge_alpha)
             if info_t['skipped']:
                 info['status']['axis_1'][i] = 'skipped'
