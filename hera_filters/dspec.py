@@ -424,11 +424,12 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                                 if the number of contiguous samples at the edge is greater then this
                                 at either side, skip.
                             cache : dict, optional
-                                dictionary for caching fitting matrices.
+                                dictionary for caching DPSS/DFT basis functions and linear solver products.
                             cache_solver_products : bool, optional
-                                If False, disables caching of the solver matrices.
-                                This is useful for if the weights change frequently
-                                and the user does not want to cache the solver matrices.
+                                If False, disables caching of the linear solver matrices. This is useful for if 
+                                the weights change frequently and the user does not want to cache the 
+                                solver matrices. The DPSS and DFT basis functions will still be cached
+                                even if this is set to False. Default value is True.
                         * clean :
                              defaults can be accessed in dspec.CLEAN_DEFAULTS
                              tol : float,
