@@ -424,7 +424,12 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                                 if the number of contiguous samples at the edge is greater then this
                                 at either side, skip.
                             cache : dict, optional
-                                dictionary for caching fitting matrices.
+                                dictionary for caching DPSS/DFT basis functions and linear solver products.
+                            cache_solver_products : bool, optional
+                                If False, disables caching of the linear solver matrices. This is useful for if
+                                the weights change frequently and the user does not want to cache the
+                                solver matrices. The DPSS and DFT basis functions will still be cached
+                                even if this is set to False. Default value is True.
                         * clean :
                              defaults can be accessed in dspec.CLEAN_DEFAULTS
                              tol : float,
@@ -522,6 +527,12 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                       cache = {}
                    else:
                       cache = filter_kwargs.pop('cache')
+
+                   if 'cache_solver_products' not in filter_kwargs:
+                       cache_solver_products = True
+                   else:
+                       cache_solver_products = filter_kwargs.pop('cache_solver_products')
+
                    # process filter_kwargs
                    if 'dayenu' == mode[0]:
                        if len(mode) > 1:
@@ -623,7 +634,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                        model, residual, info = _fit_basis_2d(x=x, data=data, filter_centers=filter_centers, filter_dims=filter_dims_d,
                                                            skip_wgt=skip_wgt, basis=mode[0], method=mode[1], wgts=wgts, basis_options=filter_kwargs,
                                                            filter_half_widths=filter_half_widths, suppression_factors=suppression_factors,
-                                                           cache=cache, max_contiguous_edge_flags=max_contiguous_edge_flags,
+                                                           cache=cache, cache_solver_products=cache_solver_products, max_contiguous_edge_flags=max_contiguous_edge_flags,
                                                            zero_residual_flags=zero_residual_flags, ridge_alpha=ridge_alpha)
                    elif mode[0] == 'clean':
                        if zero_residual_flags is None:
@@ -1598,7 +1609,9 @@ def delay_filter_leastsq(data, flags, sigma, nmax, add_noise=False,
 
 def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 basis_options, suppression_factors=None, hash_decimal=10,
-                method='leastsq', basis='dft', cache=None, ridge_alpha=0.0):
+                method='leastsq', basis='dft', cache=None, cache_solver_products=True,
+                ridge_alpha=0.0
+    ):
     r"""
     A 1d linear-least-squares fitting function for computing models and residuals for fitting of the form
     y_model = A @ c
@@ -1664,6 +1677,13 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
                 [A^T W A]^{-1} A^T W and applying it to the y vector.
+    cache: dictionary, optional
+        dictionary for caching intermediate results. If None, no caching is done.
+        If provided, the cache will be used to store intermediate results such as
+        the covariance matrix and the fitting matrix.
+    cache_solver_products: bool, optional
+        If True, the cache will be used to store intermediate results such as the covariance matrix and the fitting matrix.
+        If False, only the basis operator will be cached. Default is True.
     ridge_alpha: float, optional
         Regularization parameter used in ridge regression. Default is 0, if value is equal to zero,
         then no regularization is applied. If value is greater than zero, ridge_alpha is used as
@@ -1696,15 +1716,21 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
     """
     if cache is None:
         cache = {}
+
+    basis_cache = cache # Always use the same cache for basis operators
+
+    # Start a solver cache for storing intermediate results
+    solver_cache = {} if not cache_solver_products else cache
+
     info = copy.deepcopy(basis_options)
     if basis.lower() == 'dft':
         amat = dft_operator(x, filter_centers=filter_centers,
                             filter_half_widths=filter_half_widths,
-                            cache=cache, **basis_options)
+                            cache=basis_cache, **basis_options)
     elif basis.lower() == 'dpss':
         amat, nterms = dpss_operator(x, filter_centers=filter_centers,
                                      filter_half_widths=filter_half_widths,
-                                     cache=cache, **basis_options)
+                                     cache=basis_cache, **basis_options)
         info['nterms'] = nterms
     else:
         raise ValueError("Specify a fitting basis in supported bases: ['dft', 'dpss']")
@@ -1735,33 +1761,33 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                     filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                     label='fitting matrix', basis=basis, mode=method, ridge_alpha=ridge_alpha)
-        if square_key in cache:
-            covmat = cache[square_key]
+        if square_key in solver_cache:
+            covmat = solver_cache[square_key]
         else:
             covmat = np.dot(np.conj(amat).T, amat)
-            cache[square_key] = covmat
+            solver_cache[square_key] = covmat
 
-        if not fm_key in cache:
+        if not fm_key in solver_cache:
             XTX = covmat - np.conj(amat[flags]).T @ amat[flags]
             XTX.flat[::XTX.shape[0] + 1] *= (1 + ridge_alpha) # add regularization term
 
         Xy = np.conj(amat[mask]).T @ y[mask]
 
         if method == 'matrix':
-            if fm_key in cache:
-                XTXinv = cache[fm_key]
+            if fm_key in solver_cache:
+                XTXinv = solver_cache[fm_key]
             else:
                 XTXinv = np.linalg.pinv(XTX)
-                cache[fm_key] = XTXinv
+                solver_cache[fm_key] = XTXinv
 
             cn_out = np.dot(XTXinv, Xy)
 
         elif method == 'solve':
-            if fm_key in cache:
-                L = cache[fm_key]
+            if fm_key in solver_cache:
+                L = solver_cache[fm_key]
             else:
                 L = linalg.lu_factor(XTX)
-                cache[fm_key] = L
+                solver_cache[fm_key] = L
 
             cn_out = linalg.lu_solve(L, Xy)
 
@@ -1802,7 +1828,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
                 fm_key = fm_key + (basis_options['fundamental_period'], )
             elif basis.lower() == 'dpss':
                 fm_key = fm_key + tuple(nterms)
-            fmat = fit_solution_matrix(w, amat, cache=cache, fit_mat_key=fm_key, ridge_alpha=ridge_alpha)
+            fmat = fit_solution_matrix(w, amat, cache=solver_cache, fit_mat_key=fm_key, ridge_alpha=ridge_alpha)
             info['fitting_matrix'] = fmat
             cn_out = fmat @ y
 
@@ -1810,13 +1836,13 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             fm_key = _fourier_filter_hash(filter_centers=filter_centers, filter_half_widths=filter_half_widths,
                                         filter_factors=suppression_vector, x=x, w=w, hash_decimal=hash_decimal,
                                         label='fitting matrix', basis=basis, mode=method, alpha=ridge_alpha)
-            if fm_key in cache:
-                L = cache[fm_key]
+            if fm_key in solver_cache:
+                L = solver_cache[fm_key]
             else:
                 XTX = np.dot(np.conj(amat).T * w, amat)
                 XTX.flat[::XTX.shape[0] + 1] *= (1 + ridge_alpha) # add regularization term
                 L = linalg.lu_factor(XTX)
-                cache[fm_key] = L
+                solver_cache[fm_key] = L
 
             Xy = np.dot(np.conj(amat).T * w, y)
             cn_out = linalg.lu_solve(L, Xy)
@@ -1989,7 +2015,7 @@ def _clean_filter(x, data, wgts, filter_centers, filter_half_widths,
 
 def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                 basis_options, suppression_factors=None,
-                method='leastsq', basis='dft', cache=None,
+                method='leastsq', basis='dft', cache=None, cache_solver_products=True,
                 filter_dims = 1, skip_wgt=0.1, max_contiguous_edge_flags=5, ridge_alpha=0.0,
                 zero_residual_flags=True):
     r"""
@@ -2060,6 +2086,13 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
                 [A^T W A]^{-1} A^T W and applying it to the y vector.
+    cache: dictionary, optional
+        dictionary to cache basis operators and intermediate results in.
+        If None, will create a new cache dictionary.
+    cache_solver_products: bool, optional
+        If True, cache the intermediate results of the solver products
+        such as the XTX matrix and the fitting matrix.
+        If False, only cache the basis functions these products.
     filter_dim, int optional
         specify dimension to filter. default 1,
         and if 2d filter, will use both dimensions.
@@ -2134,7 +2167,8 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                                             filter_half_widths=filter_half_widths[1],
                                             suppression_factors=suppression_factors[1],
                                             basis_options=basis_options[1], method=method,
-                                            basis=basis, cache=cache, ridge_alpha=ridge_alpha)
+                                            basis=basis, cache=cache, cache_solver_products=cache_solver_products,
+                                            ridge_alpha=ridge_alpha)
             if info_t['skipped']:
                 info['status']['axis_1'][i] = 'skipped'
             else:

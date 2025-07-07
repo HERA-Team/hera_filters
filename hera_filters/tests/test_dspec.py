@@ -1320,6 +1320,30 @@ def test__fit_basis_1d():
                                 method='solve', basis='dpss', cache=cache)
     assert np.allclose(mod1, mod2)
 
+def test_fit_basis_1d_cache():
+    #perform dpss interpolation, leastsq
+    fs = np.arange(-50,50)
+    #here is some data
+    data = np.exp(2j * np.pi * 3.5/50. * fs) + 5*np.exp(2j * np.pi * 2.1/50. * fs)
+    data += np.exp(-2j * np.pi * 0.7/50. * fs) + 5*np.exp(2j * np.pi * -1.36/50. * fs)
+    #here are some weights with flags
+    wgts = np.ones_like(data)
+    wgts[6] = 0
+    wgts[17] = 0
+    dw = data*wgts
+    dpss_opts={'eigenval_cutoff':[1e-12]}
+    cache1 = {}
+    cache2 = {}
+    #perform dpss interpolation, leastsq and matrix and compare results
+    mod1, resid1, info1 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='leastsq', basis='dpss', cache_solver_products=True, cache=cache1)
+    mod2, resid2, info2 = dspec._fit_basis_1d(fs, dw, wgts, [0.], [5./50.], basis_options=dpss_opts,
+                                    method='matrix', basis='dpss', cache_solver_products=False, cache=cache2)
+    assert np.all(np.isclose(mod1, mod2, atol=1e-6))
+    assert len(cache1) > len(cache2)
+    assert len(cache1) > 0
+    assert len(cache2) > 0
+
 def test_fit_basis_1d_with_missing_channels():
     fs = np.arange(-50,50)
     #here is some data
