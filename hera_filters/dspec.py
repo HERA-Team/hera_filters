@@ -1,15 +1,16 @@
 # Copyright (c) 2018 The HERA Collaboration
 # Licensed under the MIT License
-
-
+# from .backend import arraylib as xp, sparse_backend as sp, linear_operator as LinearOperator
 import copy
 import hashlib
 from warnings import warn
 
 import numpy as np
-from scipy import linalg, sparse
+from scipy import linalg
 from scipy.optimize import leastsq, lsq_linear
 from scipy.signal import windows
+
+from . import backend
 
 #DEFAULT PARAMETERS FOR CLEANs
 CLEAN_DEFAULTS_1D={'tol':1e-9, 'window':'none',
@@ -2989,6 +2990,18 @@ def sparse_linear_fit_2D(
         Dictionary containing additional information about the solution
         from sparse.linalg.lsqr.
     """
+    # Import backend functions
+    xp = backend.arraylib
+    sp = backend.sparse_backend
+    LinearOperator = backend.linear_operator
+
+    # Coerce all inputs to correct array type
+    data = xp.asarray(data)
+    weights = xp.asarray(weights)
+    axis_1_basis = xp.asarray(axis_1_basis)
+    axis_2_basis = xp.asarray(axis_2_basis)
+
+    # Check input shapes
     if data.shape != weights.shape:
         raise ValueError(
             f"Shape mismatch: `weights` (shape: {weights.shape}) must have the same" \
@@ -3014,65 +3027,68 @@ def sparse_linear_fit_2D(
     if precondition_solver:
         # Compute separate preconditioners for the two axes
         # Start by computing separable weights for the two axes
-        with np.errstate(invalid='ignore'):
-            axis_1_wgts = np.nanmean(
-                np.where(weights == 0, np.nan, weights),
-                axis=1, keepdims=True
-            )
-            axis_2_wgts = np.nanmean(
-                np.where(weights == 0, np.nan, weights / axis_1_wgts),
-                axis=0, keepdims=True
-            )
-        axis_1_wgts[~np.isfinite(axis_1_wgts)] = 0.0
-        axis_2_wgts[~np.isfinite(axis_2_wgts)] = 0.0
-        axis_1_wgts = np.squeeze(axis_1_wgts)
-        axis_2_wgts = np.squeeze(axis_2_wgts)
+        axis_1_wgts = xp.nanmean(
+            xp.where(weights == 0, xp.nan, weights),
+            axis=1, keepdims=True
+        )
+        axis_2_wgts = xp.nanmean(
+            xp.where(weights == 0, xp.nan, weights / axis_1_wgts),
+            axis=0, keepdims=True
+        )
+        axis_1_wgts[~xp.isfinite(axis_1_wgts)] = 0.0
+        axis_2_wgts[~xp.isfinite(axis_2_wgts)] = 0.0
+        axis_1_wgts = xp.squeeze(axis_1_wgts)
+        axis_2_wgts = xp.squeeze(axis_2_wgts)
 
 
         # Compute the preconditioner for the first axis
-        XTX_axis_1 = np.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
-        eigenvals, _ = np.linalg.eigh(XTX_axis_1)
-        eigenvals = eigenvals[np.argsort(eigenvals)[::-1]]
-        axis_1_lambda = eigenvals[
-            np.max(np.where(np.cumsum(eigenvals) / np.sum(eigenvals) < (1 - eigenspec_threshold)))
-        ]
-        axis_1_pcond = np.linalg.pinv(
-            XTX_axis_1 + np.eye(XTX_axis_1.shape[0]) * axis_1_lambda
+        XTX_axis_1 = xp.dot(axis_1_basis.T.conj() * axis_1_wgts, axis_1_basis)
+        eigenvals, _ = xp.linalg.eigh(XTX_axis_1)
+        eigenvals = eigenvals[xp.argsort(eigenvals)[::-1]]
+        eigenval_frac = xp.cumsum(eigenvals) / eigenvals.sum()
+        axis_1_lambda = eigenvals[eigenval_frac < (1 - eigenspec_threshold)][-1]
+        axis_1_pcond = xp.linalg.pinv(
+            XTX_axis_1 + xp.eye(XTX_axis_1.shape[0]) * axis_1_lambda
         )
 
         # Compute the preconditioner for the second axis
-        XTX_axis_2 = np.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
-        eigenvals, _ = np.linalg.eigh(XTX_axis_2)
-        eigenvals = eigenvals[np.argsort(eigenvals)[::-1]]
-        axis_2_lambda = eigenvals[
-            np.max(np.where(np.cumsum(eigenvals) / np.sum(eigenvals) < (1 - eigenspec_threshold)))
-        ]
-        axis_2_pcond = np.linalg.pinv(
-            XTX_axis_2 + np.eye(XTX_axis_2.shape[0]) * axis_2_lambda
+        XTX_axis_2 = xp.dot(axis_2_basis.T.conj() * axis_2_wgts, axis_2_basis)
+        eigenvals, _ = xp.linalg.eigh(XTX_axis_2)
+        eigenvals = eigenvals[xp.argsort(eigenvals)[::-1]]
+        eigenval_frac = xp.cumsum(eigenvals) / eigenvals.sum()
+        axis_2_lambda = eigenvals[eigenval_frac < (1 - eigenspec_threshold)][-1]
+        axis_2_pcond = xp.linalg.pinv(
+            XTX_axis_2 + xp.eye(XTX_axis_2.shape[0]) * axis_2_lambda
         )
 
-        axis_1_basis = np.dot(axis_1_basis, axis_1_pcond)
-        axis_2_basis = np.dot(axis_2_basis, axis_2_pcond)
+        axis_1_basis = xp.dot(axis_1_basis, axis_1_pcond)
+        axis_2_basis = xp.dot(axis_2_basis, axis_2_pcond)
 
     # Define the implicit LinearOperator representing the Kronecker product
-    linear_operator = sparse.linalg.LinearOperator(
+    linear_operator = LinearOperator(
         full_operator_shape,
         matvec=lambda v: _kron_matvec(v, weights, axis_1_basis, axis_2_basis),
         rmatvec=lambda u: _kron_rmatvec(u, weights, axis_1_basis, axis_2_basis),
     )
+
+    # Minimum number of iterations for LSMR
+    # If not provided, set to twice the number of parameters
+    if iter_lim is None:
+        iter_lim = linear_operator.shape[1] * 2
+
     meta = {}
-    # Solve the least-squares problem using LSQR
+    # Solve the least-squares problem using LSMR
     (
         x,
         meta['istop'],
         meta['iter_num'],
         *_
-    )= sparse.linalg.lsqr(
+    ) = sp.linalg.lsmr(
         A=linear_operator,
         b=(data * weights).ravel(),
         atol=atol,
         btol=btol,
-        iter_lim=iter_lim,
+        maxiter=iter_lim,
         **kwargs
     )
 
@@ -3080,7 +3096,7 @@ def sparse_linear_fit_2D(
     x = x.reshape(axis_1_basis.shape[-1], axis_2_basis.shape[-1])
 
     if precondition_solver:
-        x = np.dot(axis_1_pcond, x).dot(axis_2_pcond)
+        x = axis_1_pcond @ x @ axis_2_pcond
 
     return x, meta
 
@@ -3115,6 +3131,7 @@ def separable_linear_fit_2D(
     x : np.ndarray
         The computed least-squares solution of shape `(i, j)`.
     """
+    # Check shapes
     if data.shape[0] != axis_1_basis.shape[0]:
         raise ValueError(
             f"Shape mismatch: `axis_1_basis` (shape: {axis_1_basis.shape}) must match" \
