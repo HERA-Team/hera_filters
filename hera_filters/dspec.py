@@ -2934,6 +2934,7 @@ def sparse_linear_fit_2D(
     iter_lim: int = None,
     precondition_solver: bool = False,
     eigenspec_threshold: float = 1e-3,
+    use_lsqr: bool = True,
     **kwargs
 ) -> np.ndarray:
     """
@@ -3061,20 +3062,36 @@ def sparse_linear_fit_2D(
         rmatvec=lambda u: _kron_rmatvec(u, weights, axis_1_basis, axis_2_basis),
     )
     meta = {}
-    # Solve the least-squares problem using LSQR
-    (
-        x,
-        meta['istop'],
-        meta['iter_num'],
-        *_
-    )= sparse.linalg.lsqr(
-        A=linear_operator,
-        b=(data * weights).ravel(),
-        atol=atol,
-        btol=btol,
-        iter_lim=iter_lim,
-        **kwargs
-    )
+    if use_lsqr:
+        # Solve the least-squares problem using LSQR
+        (
+            x,
+            meta['istop'],
+            meta['iter_num'],
+            *_
+        )= sparse.linalg.lsqr(
+            A=linear_operator,
+            b=(data * weights).ravel(),
+            atol=atol,
+            btol=btol,
+            iter_lim=iter_lim,
+            **kwargs
+        )
+    else:
+        # Solve the least-squares problem using LSQR
+        (
+            x,
+            meta['istop'],
+            meta['iter_num'],
+            *_
+        )= sparse.linalg.lsmr(
+            A=linear_operator,
+            b=(data * weights).ravel(),
+            atol=atol,
+            btol=btol,
+            maxiter=iter_lim,
+            **kwargs
+        )
 
     # Reshape output
     x = x.reshape(axis_1_basis.shape[-1], axis_2_basis.shape[-1])
