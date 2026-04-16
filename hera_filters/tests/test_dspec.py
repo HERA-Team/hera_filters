@@ -82,6 +82,57 @@ def test_are_wgts_binary():
     wgts = np.random.choice([0, 1], size=100) + 1e-12
     assert not dspec._are_wgts_binary(wgts)
 
+
+def test_pinv_demote_real_complex_essentially_real():
+    """Direct unit test for the _pinv_demote_real helper."""
+    rng = np.random.default_rng(0)
+    A = rng.standard_normal((50, 10))
+    M_real = A.T @ A  # real symmetric PSD
+
+    # Inject ULP-level imaginary noise to mimic complex BLAS rounding
+    M_complex = M_real.astype(np.complex128)
+    M_complex += 1j * 1e-16 * rng.standard_normal(M_complex.shape)
+
+    Pinv_real = np.linalg.pinv(M_real)
+    Pinv_safe = dspec._pinv_demote_real(M_complex)
+
+    assert Pinv_safe.dtype == M_complex.dtype  # preserve caller's dtype
+    assert np.allclose(Pinv_safe.real, Pinv_real)
+    assert np.allclose(Pinv_safe.imag, 0)
+
+    # Genuinely complex input should still go through the unmodified pinv path
+    H = rng.standard_normal((10, 10)) + 1j * rng.standard_normal((10, 10))
+    H = H @ H.conj().T  # Hermitian PSD
+    Pinv_H = dspec._pinv_demote_real(H)
+    assert np.allclose(H @ Pinv_H @ H, H, atol=1e-8)
+
+
+def test_fit_basis_1d_complex_essentially_real_matrix():
+    """Regression test for zgesdd convergence failures on essentially-real
+    complex Gram matrices in dpss_matrix mode.
+
+    The failure surfaces when X (DPSS basis) is real but hera_filters
+    forms XTX = conj(X).T @ diag(w) @ X via complex BLAS, leaving imaginary
+    parts at the ~1e-16 ULP level. zgesdd can fail to converge on such
+    matrices; dgesdd (used when input is real) does not.
+    """
+    fs = np.linspace(100e6, 200e6, 200)
+    rng = np.random.default_rng(42)
+    data = (rng.standard_normal(len(fs)) + 1j * rng.standard_normal(len(fs))).astype(complex)
+    wgts = np.ones(len(fs))
+    # Several gaps of varying size to leave some DPSS modes underconstrained
+    for lo, hi in [(20, 35), (60, 95), (150, 165)]:
+        wgts[lo:hi] = 0
+    dw = data * wgts
+    dpss_opts = {'eigenval_cutoff': [1e-12]}
+
+    mod_matrix, _, _ = dspec._fit_basis_1d(fs, dw, wgts, [0.], [50e-9],
+        basis_options=dpss_opts, method='matrix', basis='dpss')
+    mod_solve, _, _ = dspec._fit_basis_1d(fs, dw, wgts, [0.], [50e-9],
+        basis_options=dpss_opts, method='solve', basis='dpss')
+    assert np.allclose(mod_matrix, mod_solve, atol=1e-6)
+
+
 def test_delay_filter_2D():
     NCHAN = 128
     NTIMES = 10
