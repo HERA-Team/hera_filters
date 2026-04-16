@@ -119,6 +119,38 @@ def _are_wgts_binary(wgts):
     """
     return np.all((wgts == 0) | (wgts == 1))
 
+
+def _pinv_demote_real(M):
+    """Pseudo-inverse that avoids LAPACK zgesdd convergence failures on
+    complex-but-essentially-real matrices.
+
+    `np.linalg.pinv` dispatches to LAPACK's zgesdd for complex input, which
+    has known brittle convergence for matrices that are mathematically real
+    but typed as complex (e.g. X^T W X for real X with complex storage,
+    where imaginary parts end up at the ~1e-16 ULP level from complex BLAS
+    rounding). Casting to real before pinv routes through dgesdd, which is
+    robust. Genuinely complex matrices are pinv'd directly.
+
+    Tolerance choice for the "essentially real" test:
+        tol = max(M.shape) * eps * max(|M.real|_max, 1)
+
+    This is scale-invariant, size-aware, and mirrors the `max(M.shape) * eps * sigma`
+    rank-cutoff formula numpy itself uses inside `pinv`. The `max(M.shape) * eps`
+    factor bounds worst-case Wilkinson backward error growth in the N-term inner
+    products that build M (e.g. for an N=200 Gram matrix this is ~4e-14, four orders
+    of magnitude above a single ULP — enough headroom for accumulated zgemm rounding,
+    yet far below any plausible "genuinely complex" signal). The `max(..., 1)` guard
+    keeps the bound sensible for near-zero matrices.
+    """
+    if np.iscomplexobj(M):
+        eps = np.finfo(M.real.dtype).eps
+        scale = max(np.max(np.abs(M.real)), 1.0)
+        tol = max(M.shape) * eps * scale
+        if np.max(np.abs(M.imag)) <= tol:
+            return np.linalg.pinv(np.real(M)).astype(M.dtype)
+    return np.linalg.pinv(M)
+
+
 def place_data_on_uniform_grid(x, data, weights, xtol=1e-3):
     """If possible, place data on a uniformly spaced grid.
 
@@ -1777,7 +1809,7 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
             if fm_key in solver_cache:
                 XTXinv = solver_cache[fm_key]
             else:
-                XTXinv = np.linalg.pinv(XTX)
+                XTXinv = _pinv_demote_real(XTX)
                 solver_cache[fm_key] = XTXinv
 
             cn_out = np.dot(XTXinv, Xy)
@@ -2284,7 +2316,7 @@ def fit_solution_matrix(weights, design_matrix, cache=None, hash_decimal=10, fit
         #should there be a conjugation!?!
         if np.linalg.cond(cmat)>=1e9:
             warn('Warning!!!!: Poorly conditioned matrix! Your linear inpainting IS WRONG!')
-            cache[opkey] = np.linalg.pinv(cmat) @ xwmat
+            cache[opkey] = _pinv_demote_real(cmat) @ xwmat
         else:
             try:
                 cache[opkey] = np.linalg.inv(cmat) @ xwmat
