@@ -84,7 +84,9 @@ def test_are_wgts_binary():
 
 
 def test_pinv_demote_real_complex_essentially_real():
-    """Direct unit test for the _pinv_demote_real helper."""
+    """Complex-but-essentially-real matrices are demoted to real before pinv,
+    so the call routes through dgesdd (or eigh, given Hermitian dispatch)
+    rather than zgesdd."""
     rng = np.random.default_rng(0)
     A = rng.standard_normal((50, 10))
     M_real = A.T @ A  # real symmetric PSD
@@ -100,11 +102,74 @@ def test_pinv_demote_real_complex_essentially_real():
     assert np.allclose(Pinv_safe.real, Pinv_real)
     assert np.allclose(Pinv_safe.imag, 0)
 
-    # Genuinely complex input should still go through the unmodified pinv path
+
+def test_pinv_demote_real_genuinely_complex_hermitian():
+    """Genuinely complex Hermitian input is pinv'd directly (no demotion),
+    and the result satisfies the Moore-Penrose identity."""
+    rng = np.random.default_rng(1)
     H = rng.standard_normal((10, 10)) + 1j * rng.standard_normal((10, 10))
-    H = H @ H.conj().T  # Hermitian PSD
+    H = H @ H.conj().T  # Hermitian PSD, non-trivial imaginary part
+
     Pinv_H = dspec._pinv_demote_real(H)
+    assert Pinv_H.dtype == H.dtype
     assert np.allclose(H @ Pinv_H @ H, H, atol=1e-8)
+
+
+def test_pinv_demote_real_hermitian_dispatch(monkeypatch):
+    """`hermitian=True` is passed to np.linalg.pinv when M is (within
+    roundoff) Hermitian, and `hermitian=False` otherwise. The Hermitian
+    path routes through eigh and avoids known gesdd convergence failures
+    on some well-conditioned XᴴWX matrices arising from DPSS fits.
+    """
+    seen = []
+    real_pinv = np.linalg.pinv
+
+    def spy(M, *args, hermitian=False, **kwargs):
+        seen.append(hermitian)
+        return real_pinv(M, *args, hermitian=hermitian, **kwargs)
+
+    monkeypatch.setattr(np.linalg, 'pinv', spy)
+
+    rng = np.random.default_rng(2)
+
+    # Real symmetric -> hermitian=True
+    A = rng.standard_normal((20, 6))
+    seen.clear()
+    dspec._pinv_demote_real(A.T @ A)
+    assert seen == [True]
+
+    # Complex Hermitian -> hermitian=True
+    H = rng.standard_normal((6, 6)) + 1j * rng.standard_normal((6, 6))
+    H = H @ H.conj().T
+    seen.clear()
+    dspec._pinv_demote_real(H)
+    assert seen == [True]
+
+    # Non-Hermitian (real, asymmetric) -> hermitian=False
+    N = rng.standard_normal((6, 6))
+    assert not np.allclose(N, N.T)
+    seen.clear()
+    dspec._pinv_demote_real(N)
+    assert seen == [False]
+
+    # Non-square -> hermitian=False (the Hermitian test must short-circuit
+    # so `M - M.conj().T` is never evaluated on a non-square matrix).
+    R = rng.standard_normal((4, 7))
+    seen.clear()
+    dspec._pinv_demote_real(R)
+    assert seen == [False]
+
+
+def test_pinv_demote_real_tolerance_near_zero():
+    """`max(|M|_max, 1)` guard keeps the tolerance sensible for near-zero
+    matrices: ULP-level imag noise on a near-zero matrix still demotes."""
+    rng = np.random.default_rng(3)
+    M = 1e-300 * rng.standard_normal((6, 6))
+    M = M + M.T  # symmetric
+    Mc = M.astype(np.complex128) + 1j * 1e-16 * rng.standard_normal(M.shape)
+    out = dspec._pinv_demote_real(Mc)
+    assert out.dtype == Mc.dtype
+    assert np.allclose(out.imag, 0)
 
 
 def test_fit_basis_1d_complex_essentially_real_matrix():
