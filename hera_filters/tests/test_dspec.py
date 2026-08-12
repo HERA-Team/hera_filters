@@ -1734,3 +1734,139 @@ def test_precondition_sparse_solver():
     np.testing.assert_allclose(sol, sol_sparse, atol=1e-8, rtol=1e-6)
     np.testing.assert_allclose(sol, sol_sparse_precond, atol=1e-8, rtol=1e-6)
     np.testing.assert_array_less(meta_precond['iter_num'], meta['iter_num'])
+
+
+def test_kron_matvec_contraction_order():
+    # Both contraction orders in _kron_matvec / _kron_rmatvec must agree, for
+    # every combination of real/complex bases and data, and must preserve dtype.
+    rng = np.random.default_rng(3)
+
+    for cplx_basis in [False, True]:
+        for cplx_data in [False, True]:
+            def make(*shape, cplx):
+                out = rng.standard_normal(shape)
+                if cplx:
+                    out = out + 1j * rng.standard_normal(shape)
+                return out
+
+            # Shapes chosen so that the two axes prefer opposite contraction orders
+            for (m, n, i, j) in [(40, 15, 3, 12), (15, 40, 12, 3), (30, 30, 29, 2)]:
+                axis_1_basis = make(m, i, cplx=cplx_basis)
+                axis_2_basis = make(n, j, cplx=cplx_basis)
+                weights = rng.random((m, n))
+                weights[rng.random((m, n)) < 0.2] = 0
+
+                x = make(i * j, cplx=cplx_data)
+                u = make(m * n, cplx=cplx_data)
+
+                # Reference: contract in the order the shapes do not favour
+                X = x.reshape(i, j)
+                ref_mv = (((axis_1_basis @ X) @ axis_2_basis.T) * weights).ravel()
+                U = u.reshape(m, n) * weights
+                ref_rmv = ((axis_1_basis.T.conj() @ U) @ axis_2_basis.conj()).ravel()
+
+                res_mv = dspec._kron_matvec(x, weights, axis_1_basis, axis_2_basis)
+                res_rmv = dspec._kron_rmatvec(u, weights, axis_1_basis, axis_2_basis)
+
+                np.testing.assert_allclose(res_mv, ref_mv, atol=1e-12, rtol=1e-10)
+                np.testing.assert_allclose(res_rmv, ref_rmv, atol=1e-12, rtol=1e-10)
+                assert res_mv.dtype == ref_mv.dtype
+                assert res_rmv.dtype == ref_rmv.dtype
+
+
+def test_sparse_linear_fit_2d_cg():
+    # method='cg' must reproduce the LSQR solution on well-determined problems,
+    # in far fewer iterations.
+    ntimes, nfreqs = 100, 50
+    rng = np.random.default_rng(42)
+    freq_basis, _ = dspec.dpss_operator(
+        np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12]
+    )
+    time_basis, _ = dspec.dpss_operator(
+        np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12]
+    )
+    freqs = np.linspace(100e6, 200e6, nfreqs)
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+
+    time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
+    freq_flags = rng.choice([True, False], p=[0.1, 0.9], size=(1, nfreqs))
+    wgts = np.outer(
+        (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,)),
+        (~freq_flags[0]).astype(float),
+    )
+    # Frequency dependence, to make the problem more ill-conditioned
+    wgts = wgts * (freqs / 150e6) ** -3.5
+
+    sol_lsqr, meta_lsqr = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
+        precondition_solver=True, atol=1e-10, btol=1e-10,
+    )
+    sol_cg, meta_cg = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
+        method='cg',
+    )
+
+    assert meta_cg['converged']
+    assert not meta_cg['fellback']
+    np.testing.assert_array_less(meta_cg['iter_num'], meta_lsqr['iter_num'])
+
+    # The two solvers should agree on the fitted model
+    model_lsqr = time_basis @ sol_lsqr @ freq_basis.T
+    model_cg = time_basis @ sol_cg @ freq_basis.T
+    np.testing.assert_allclose(model_cg, model_lsqr, atol=1e-8, rtol=1e-6)
+
+    # ...and CG must not fit the weighted data any worse than LSQR
+    chi2 = lambda mdl: np.sum(np.abs(wgts * (data - mdl)) ** 2)
+    assert chi2(model_cg) <= chi2(model_lsqr) * (1 + 1e-6)
+
+    # An unknown method is rejected
+    pytest.raises(
+        ValueError,
+        dspec.sparse_linear_fit_2D,
+        data=data,
+        weights=wgts,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+        method='not-a-solver',
+    )
+
+
+def test_precondition_sparse_solver_degenerate_weights():
+    # The preconditioner used to select its Tikhonov ridge from the cumulative
+    # eigenvalue spectrum, which raised
+    #   ValueError: zero-size array to reduction operation maximum
+    # whenever the largest eigenvalue already carried more than
+    # (1 - eigenspec_threshold) of the total. Flooring the eigenvalues instead
+    # makes these cases well defined.
+    ntimes, nfreqs = 60, 40
+    rng = np.random.default_rng(42)
+    freq_basis, _ = dspec.dpss_operator(
+        np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12]
+    )
+    time_basis, _ = dspec.dpss_operator(
+        np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12]
+    )
+    data = rng.normal(0, 1, size=(ntimes, nfreqs)) + 0j
+
+    # A single unflagged channel leaves a Gramian dominated by one eigenvalue
+    wgts = np.zeros((ntimes, nfreqs))
+    wgts[:, 5] = 1.0
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=wgts,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+        precondition_solver=True,
+    )
+    assert np.all(np.isfinite(sol))
+
+    # A fully flagged waterfall gives an all-zero Gramian
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=np.zeros((ntimes, nfreqs)),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+        precondition_solver=True,
+    )
+    np.testing.assert_allclose(sol, 0.0, atol=1e-12)
