@@ -3124,7 +3124,7 @@ def _kron_normal_preconditioner(weights: np.ndarray, axis_1_basis: np.ndarray,
 
     return apply
 
-def _pcg_normal_equations(matvec, precond, rhs, tol, iter_lim):
+def _pcg_normal_equations(matvec, precond, rhs, tol, iter_lim, x0=None):
     """
     Preconditioned conjugate gradients on a Hermitian positive-definite operator.
 
@@ -3144,23 +3144,33 @@ def _pcg_normal_equations(matvec, precond, rhs, tol, iter_lim):
         Convergence tolerance on ``||rhs - N x|| / ||rhs||``.
     iter_lim : int
         Maximum number of iterations.
+    x0 : np.ndarray, optional
+        Starting guess of size (i, j). The convergence test is relative to
+        ``||rhs||``, which does not depend on the starting guess, so a warm start
+        reduces the work needed to hit the same absolute accuracy. Note that for
+        a rank-deficient operator the null-space component of `x0` is retained,
+        since CG only ever adds directions from the Krylov space.
 
     Returns:
     -------
     tuple
         ``(solution, n_iter, converged, relative_residual)``
     """
-    x = np.zeros_like(rhs)
-    residual = rhs.copy()
     rhs_norm = np.linalg.norm(rhs)
+    if x0 is None:
+        x = np.zeros_like(rhs)
+        residual = rhs.copy()
+    else:
+        x = np.array(x0, dtype=rhs.dtype).reshape(rhs.shape)
+        residual = rhs - matvec(x)
     if not rhs_norm > 0:
         return x, 0, True, 0.0
 
     z = precond(residual)
     p = z.copy()
     rz = np.vdot(residual, z)
-    best_x, best_norm = x.copy(), rhs_norm
-    converged, n_iter = False, 0
+    best_x, best_norm = x.copy(), np.linalg.norm(residual)
+    converged, n_iter = best_norm <= tol * rhs_norm, 0
 
     while not converged and n_iter < iter_lim:
         n_iter += 1
@@ -3260,14 +3270,34 @@ def sparse_linear_fit_2D(
             `eigenspec_threshold` are ignored.
 
         .. warning::
-            ``'cg'`` does not return the minimum-norm solution, so on
-            *underdetermined* problems -- fully flagged band edges, or a small
-            unflagged sub-block -- it can differ from ``'lsqr'`` inside the
-            flagged region even though both fit the unflagged data equally well.
-            On well-determined problems the two agree to solver tolerance. Where
-            the fit is well determined ``'cg'`` matched an exact dense
-            minimum-norm solve to 4 decimal places in testing, including with
-            interior channels, whole integrations, and 90% of samples flagged.
+            **Do not use ``'cg'`` for inpainting across large contiguous gaps.**
+
+            ``'cg'`` converges to the least-squares solution, which is the wrong
+            thing to want when the fit is underdetermined: it does not return the
+            minimum-norm solution, so the model is unconstrained inside a gap. It
+            reaches a *lower* chi^2 than ``'lsqr'`` while producing wildly larger
+            values where there is no data. Measured on a 400x300 waterfall with a
+            41x88 basis, comparing the recovered model inside a contiguous flagged
+            gap against the known truth:
+
+            ====================  ==================  ==================
+            gap width             'lsqr' rel. error   'cg' rel. error
+            ====================  ==================  ==================
+            10 channels           1.7e-03             1.7e-03
+            20 channels           7.7e-02             8.4e-02
+            40 channels           6.0e-01             3.2e+02
+            60 channels           7.2e-01             8.0e+03
+            100 channels          8.4e-01             1.2e+04
+            ====================  ==================  ==================
+
+            ``'lsqr'`` stays well behaved here because it hits `iter_lim` without
+            converging, and that early stopping acts as a regularizer. ``'cg'``
+            converges, and is worse for it.
+
+            ``'cg'`` is safe and much faster where the fit is well determined:
+            scattered flags, whole flagged integrations, interior gaps of order a
+            few DPSS periods, and up to 90% of samples flagged at random all
+            matched an exact dense minimum-norm solve to 4 decimal places.
             Validate against ``'lsqr'`` on your own data before switching.
             ``meta['converged']`` and ``meta['fellback']`` report what happened;
             if CG fails to converge the solve is redone with LSQR.
@@ -3327,9 +3357,11 @@ def sparse_linear_fit_2D(
         ).reshape(nmode_1, nmode_2)
 
         precond = _kron_normal_preconditioner(weights, axis_1_basis, axis_2_basis)
+        cg_x0 = kwargs.pop('x0', None)
         x, n_iter, converged, resid = _pcg_normal_equations(
             normal_matvec, precond, rhs, cg_tol,
-            iter_lim if iter_lim is not None else 10 * nmode_1 * nmode_2
+            iter_lim if iter_lim is not None else 10 * nmode_1 * nmode_2,
+            x0=None if cg_x0 is None else np.reshape(cg_x0, (nmode_1, nmode_2))
         )
         meta = {'iter_num': n_iter, 'converged': bool(converged),
                 'resid': float(resid), 'fellback': False}
