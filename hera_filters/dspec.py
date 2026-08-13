@@ -3351,8 +3351,11 @@ def sparse_linear_fit_2D(
                 forward, weights, axis_1_basis, axis_2_basis
             ).reshape(nmode_1, nmode_2)
 
+        # A^H b, for the same b = W . data that LSQR is given. _kron_rmatvec
+        # applies the second factor of W, so this is A1^H (W**2 . data) A2
+        # without ever forming W**2 explicitly.
         rhs = _kron_rmatvec(
-            (data * weights ** 2).ravel(), np.ones(1),
+            (data * weights).ravel(), weights,
             axis_1_basis, axis_2_basis
         ).reshape(nmode_1, nmode_2)
 
