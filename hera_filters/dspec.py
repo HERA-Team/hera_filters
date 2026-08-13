@@ -3341,6 +3341,9 @@ def sparse_linear_fit_2D(
         axis_1_basis.shape[-1] * axis_2_basis.shape[-1],  # i * j
     )
 
+    # Diagnostics from a CG attempt that stalled and fell through to LSQR
+    meta_cg = None
+
     if method == 'cg':
         nmode_1, nmode_2 = axis_1_basis.shape[-1], axis_2_basis.shape[-1]
 
@@ -3439,7 +3442,7 @@ def sparse_linear_fit_2D(
         x = np.dot(axis_1_pcond, x).dot(axis_2_pcond)
 
     # Preserve the CG diagnostics if we got here via the fallback
-    if 'meta_cg' in locals():
+    if meta_cg is not None:
         meta.update(cg_iter_num=meta_cg['iter_num'], cg_resid=meta_cg['resid'],
                     converged=False, fellback=True)
 

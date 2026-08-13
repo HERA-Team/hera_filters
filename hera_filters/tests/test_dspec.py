@@ -1832,6 +1832,57 @@ def test_sparse_linear_fit_2d_cg():
     )
 
 
+def test_sparse_linear_fit_2d_cg_falls_back_to_lsqr():
+    # When CG cannot reach cg_tol the solve is redone with LSQR. Check that the
+    # fallback fires, warns, still returns a usable answer, and reports both
+    # solvers' diagnostics without leaking those keys into the other paths.
+    ntimes, nfreqs = 120, 100
+    rng = np.random.default_rng(3)
+    freq_basis, _ = dspec.dpss_operator(
+        np.linspace(100e6, 200e6, nfreqs), [0], [300e-9], eigenval_cutoff=[1e-12]
+    )
+    time_basis, _ = dspec.dpss_operator(
+        np.linspace(0, ntimes * 10, ntimes), [0], [2e-3], eigenval_cutoff=[1e-12]
+    )
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+
+    # Only a small sub-block carries any weight, which leaves the fit badly
+    # underdetermined and stalls CG.
+    wgts = np.zeros((ntimes, nfreqs))
+    wgts[30:90, 20:55] = 1.0
+
+    with pytest.warns(UserWarning, match="Conjugate gradients did not converge"):
+        sol, meta = dspec.sparse_linear_fit_2D(
+            data=data, weights=wgts, axis_1_basis=time_basis,
+            axis_2_basis=freq_basis, method='cg', cg_tol=1e-14, iter_lim=40,
+        )
+    assert meta['fellback']
+    assert not meta['converged']
+    assert 'cg_iter_num' in meta and 'cg_resid' in meta
+    assert 'istop' in meta                      # came from the LSQR re-solve
+    assert np.all(np.isfinite(sol))
+    assert sol.shape == (time_basis.shape[-1], freq_basis.shape[-1])
+
+    # A converging CG solve must not report a fallback or expose cg_* keys
+    wgts_ok = np.ones((ntimes, nfreqs))
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts_ok, axis_1_basis=time_basis,
+        axis_2_basis=freq_basis, method='cg',
+    )
+    assert meta['converged']
+    assert not meta['fellback']
+    assert 'cg_iter_num' not in meta
+
+    # ...and neither must a plain LSQR solve
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts_ok, axis_1_basis=time_basis,
+        axis_2_basis=freq_basis, precondition_solver=True,
+    )
+    assert 'cg_iter_num' not in meta
+    assert 'fellback' not in meta
+
+
 def test_precondition_sparse_solver_degenerate_weights():
     # The preconditioner used to select its Tikhonov ridge from the cumulative
     # eigenvalue spectrum, which raised
