@@ -1837,8 +1837,8 @@ def test_precondition_sparse_solver_degenerate_weights():
     # eigenvalue spectrum, which raised
     #   ValueError: zero-size array to reduction operation maximum
     # whenever the largest eigenvalue already carried more than
-    # (1 - eigenspec_threshold) of the total. Flooring the eigenvalues instead
-    # makes these cases well defined.
+    # (1 - eigenspec_threshold) of the total. Guarding that case (and the fully
+    # flagged all-zero Gramian case) makes these inputs well defined.
     ntimes, nfreqs = 60, 40
     rng = np.random.default_rng(42)
     freq_basis, _ = dspec.dpss_operator(
