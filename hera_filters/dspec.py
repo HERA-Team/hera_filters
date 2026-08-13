@@ -2938,7 +2938,7 @@ def _kron_matvec(
     m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
     i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
 
-    # Reshape v into (i, j) matrix
+    # Reshape x into (i, j) matrix
     X = x.reshape((i, j))
 
     # Compute the transformation, contracting in whichever order is cheaper.
