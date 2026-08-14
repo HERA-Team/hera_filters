@@ -2898,12 +2898,42 @@ def _real_matmul(A: np.ndarray, X: np.ndarray) -> np.ndarray:
         The product ``A @ X``, of size (p, r).
     """
     if X.ndim == 2 and np.iscomplexobj(X) and not np.iscomplexobj(A) \
-            and X.flags.c_contiguous:
+            and X.flags.c_contiguous \
+            and np.dtype(A.dtype) == np.dtype(X.real.dtype):
         out = np.empty((A.shape[0], X.shape[1]), dtype=X.dtype)
         out.view(X.real.dtype).reshape(A.shape[0], -1)[:] = \
             A @ X.view(X.real.dtype).reshape(X.shape[0], -1)
         return out
     return A @ X
+
+def _kron_model(
+    X: np.ndarray,
+    axis_1_basis: np.ndarray,
+    axis_2_basis: np.ndarray
+) -> np.ndarray:
+    """Apply the unweighted 2D Kronecker model to a coefficient array."""
+    m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
+    i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
+    X = np.reshape(X, (i, j))
+
+    # Contract in whichever order requires fewer floating-point operations.
+    if (m * i * j + m * j * n) <= (i * j * n + m * i * n):
+        return _real_matmul(axis_1_basis, X) @ axis_2_basis.T
+    return _real_matmul(axis_1_basis, X @ axis_2_basis.T)
+
+def _kron_adjoint(
+    X: np.ndarray,
+    axis_1_basis: np.ndarray,
+    axis_2_basis: np.ndarray
+) -> np.ndarray:
+    """Apply the adjoint of the unweighted 2D Kronecker model."""
+    m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
+    i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
+    X = np.reshape(X, (m, n))
+
+    if (m * i * n + i * n * j) <= (m * n * j + m * i * j):
+        return _real_matmul(axis_1_basis.T.conj(), X) @ axis_2_basis.conj()
+    return _real_matmul(axis_1_basis.T.conj(), X @ axis_2_basis.conj())
 
 def _kron_matvec(
     x: np.ndarray,
@@ -2935,24 +2965,8 @@ def _kron_matvec(
     np.ndarray
         Flattened result of size (m * n,).
     """
-    m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
-    i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
-
-    # Reshape x into (i, j) matrix
-    X = x.reshape((i, j))
-
-    # Compute the transformation, contracting in whichever order is cheaper.
-    # (axis_1_basis @ X) @ axis_2_basis.T costs m*i*j + m*j*n flops, whereas
-    # axis_1_basis @ (X @ axis_2_basis.T) costs i*j*n + m*i*n. Which one wins
-    # depends on the shapes, and the difference is a factor of ~2 for typical
-    # HERA waterfalls.
-    if (m * i * j + m * j * n) <= (i * j * n + m * i * n):
-        Y = _real_matmul(axis_1_basis, X) @ axis_2_basis.T
-    else:
-        Y = _real_matmul(axis_1_basis, X @ axis_2_basis.T)
-
     # Apply the weight W and return flattened result
-    return (Y * weights).ravel()
+    return (_kron_model(x, axis_1_basis, axis_2_basis) * weights).ravel()
 
 def _kron_rmatvec(
     data: np.ndarray,
@@ -2983,88 +2997,70 @@ def _kron_rmatvec(
     np.ndarray
         Flattened result of size (i * j,).
     """
-    m, n = axis_1_basis.shape[0], axis_2_basis.shape[0]
-    i, j = axis_1_basis.shape[1], axis_2_basis.shape[1]
+    return _kron_adjoint(
+        data.reshape(weights.shape) * weights, axis_1_basis, axis_2_basis
+    ).ravel()
 
-    # Reshape u into (m, n) matrix and apply W
-    X = (data.reshape((m, n))) * weights
+def _leading_separable_weights(weights: np.ndarray):
+    """Return the leading rank-one factors of a non-negative weight matrix."""
+    weights = np.asarray(weights, dtype=float)
+    axis_2_vec = np.asarray(weights.sum(axis=0), dtype=float)
+    norm = np.linalg.norm(axis_2_vec)
+    if not norm > 0:
+        return np.zeros(weights.shape[0]), np.zeros(weights.shape[1])
+    axis_2_vec /= norm
 
-    # Compute the transformation, contracting in whichever order is cheaper.
-    # Note the optimal order here is generally *not* the same as in
-    # _kron_matvec, since the intermediate shapes differ.
-    if (m * i * n + i * n * j) <= (m * n * j + m * i * j):
-        Y = _real_matmul(axis_1_basis.T.conj(), X) @ axis_2_basis.conj()
-    else:
-        Y = _real_matmul(axis_1_basis.T.conj(), X @ axis_2_basis.conj())
+    # Power iteration is substantially cheaper than an SVD of the full
+    # waterfall, and Perron-Frobenius lets us use real non-negative vectors.
+    axis_1_vec = np.zeros(weights.shape[0])
+    for _ in range(30):
+        axis_1_vec = weights @ axis_2_vec
+        norm = np.linalg.norm(axis_1_vec)
+        if not norm > 0:
+            return np.zeros(weights.shape[0]), np.zeros(weights.shape[1])
+        axis_1_vec /= norm
+        new_axis_2_vec = weights.T @ axis_1_vec
+        norm = np.linalg.norm(new_axis_2_vec)
+        if not norm > 0:
+            return np.zeros(weights.shape[0]), np.zeros(weights.shape[1])
+        new_axis_2_vec /= norm
+        if np.linalg.norm(new_axis_2_vec - axis_2_vec) < 1e-10:
+            axis_2_vec = new_axis_2_vec
+            break
+        axis_2_vec = new_axis_2_vec
 
-    # Return flattened result
-    return Y.ravel()
+    scale = float(axis_1_vec @ weights @ axis_2_vec)
+    return scale * axis_1_vec, axis_2_vec
 
-def _regularized_inverse_gramian(
+def _inverse_sqrt_gramian(
     basis: np.ndarray,
     weights: np.ndarray,
-    eigenspec_threshold: float
-) -> np.ndarray:
-    """
-    Compute a regularized inverse of the weighted Gramian matrix of a basis.
-
-    Forms ``G = basis^H diag(weights) basis`` and returns
-    ``pinv(G + lambda * I)``, where lambda is the smallest eigenvalue whose
-    running cumulative sum (from largest to smallest) stays below
-    ``1 - eigenspec_threshold`` of the total.
-
-    The additive ridge is deliberate. When whole rows or columns of the
-    waterfall are flagged the Gramian is rank deficient, and the ridge damps
-    those unconstrained directions. Replacing it with a multiplicative
-    eigenvalue floor amplifies them instead, which leaves the preconditioned
-    operator badly scaled: LSQR's relative stopping test then trips early and
-    returns a much worse fit while reporting fewer iterations.
-
-    Parameters:
-    ----------
-    basis : np.ndarray
-        Fitting basis of size (m, i).
-    weights : np.ndarray
-        Weights along the corresponding axis, of size (m,).
-    eigenspec_threshold : float
-        Fraction of the eigenvalue spectrum to exclude when selecting the ridge.
-
-    Returns:
-    -------
-    np.ndarray
-        Regularized inverse Gramian of size (i, i).
-    """
+    rcond: float,
+    return_full_rank: bool = False
+):
+    """Return a rank-truncated inverse square root of a weighted Gramian."""
     gramian = np.dot(basis.T.conj() * weights, basis)
-
-    # eigh returns eigenvalues in ascending order; reverse for descending.
-    # (This is what the previous np.argsort call was doing, more expensively.)
-    eigenvals = np.linalg.eigvalsh(gramian)[::-1]
-
-    # A fully flagged axis gives an all-zero Gramian and no meaningful inverse.
-    total = np.sum(eigenvals)
-    if not total > 0:
-        return np.zeros_like(gramian)
-
-    # Index of the smallest eigenvalue still considered significant. If even the
-    # largest eigenvalue already carries more than 1 - eigenspec_threshold of the
-    # total, the significant set is just that one eigenvalue. Guarding this case
-    # avoids "zero-size array to reduction operation maximum" from np.max on an
-    # empty result.
-    significant = np.where(np.cumsum(eigenvals) / total < (1 - eigenspec_threshold))[0]
-    lam = eigenvals[significant.max()] if significant.size else eigenvals[0]
-
-    return np.linalg.pinv(gramian + np.eye(gramian.shape[0]) * lam, hermitian=True)
+    eigenvals, eigenvecs = np.linalg.eigh(gramian)
+    largest = max(float(eigenvals[-1]), 0.0)
+    if not largest > 0:
+        result = np.zeros_like(gramian)
+        return (result, False) if return_full_rank else result
+    inverse_sqrt = np.zeros_like(eigenvals)
+    retained = eigenvals > rcond * largest
+    inverse_sqrt[retained] = 1.0 / np.sqrt(eigenvals[retained])
+    result = (eigenvecs * inverse_sqrt) @ eigenvecs.T.conj()
+    return (result, bool(np.all(retained))) if return_full_rank else result
 
 def _kron_normal_preconditioner(weights: np.ndarray, axis_1_basis: np.ndarray,
-                                axis_2_basis: np.ndarray):
+                                axis_2_basis: np.ndarray, rcond: float):
     """
     Build an approximate inverse of the normal operator for the 2D fit.
 
     The normal operator of the weighted problem is
 
-        N(X) = A1^H ( W**2 . (A1 X A2^H) ) A2
+        N(X) = A1^H ( W . (A1 X A2^H) ) A2
 
-    Writing the SVD ``W**2 = sum_k s_k u_k v_k^H`` factorises this *exactly* as a
+    Writing the SVD ``W = sum_k s_k u_k v_k^H`` factorises this *exactly* as a
     sum of Kronecker products, ``N(X) = sum_k G1_k X G2_k``, with
     ``G1_k = A1^H diag(s_k u_k) A1`` and ``G2_k = A2^H diag(v_k) A2``. The leading
     term alone is a good approximation whenever the weights are close to
@@ -3086,37 +3082,24 @@ def _kron_normal_preconditioner(weights: np.ndarray, axis_1_basis: np.ndarray,
     callable
         Function mapping an (i, j) residual to an approximate (i, j) solution.
     """
-    weights_sq = np.asarray(weights, dtype=float) ** 2
+    axis_1_weights, axis_2_weights = _leading_separable_weights(weights)
+    if not np.any(axis_1_weights):
+        return lambda residual: np.zeros_like(residual)
 
-    # Leading singular triplet of a non-negative matrix, by power iteration.
-    # Perron-Frobenius guarantees the leading vectors can be taken non-negative.
-    axis_2_vec = np.asarray(weights_sq.sum(axis=0), dtype=float)
-    norm = np.linalg.norm(axis_2_vec)
-    axis_2_vec = axis_2_vec / norm if norm > 0 else np.ones(weights_sq.shape[1])
-    for _ in range(30):
-        axis_1_vec = weights_sq @ axis_2_vec
-        norm = np.linalg.norm(axis_1_vec)
-        if not norm > 0:
-            break
-        axis_1_vec /= norm
-        axis_2_vec = weights_sq.T @ axis_1_vec
-        norm = np.linalg.norm(axis_2_vec)
-        if not norm > 0:
-            break
-        axis_2_vec /= norm
-    scale = float(axis_1_vec @ weights_sq @ axis_2_vec)
-
-    gramian_1 = np.dot(axis_1_basis.T.conj() * (scale * axis_1_vec), axis_1_basis)
-    gramian_2 = np.dot(axis_2_basis.T.conj() * axis_2_vec, axis_2_basis)
+    gramian_1 = np.dot(axis_1_basis.T.conj() * axis_1_weights, axis_1_basis)
+    gramian_2 = np.dot(axis_2_basis.T.conj() * axis_2_weights, axis_2_basis)
     eigenvals_1, eigenvecs_1 = np.linalg.eigh(gramian_1)
     eigenvals_2, eigenvecs_2 = np.linalg.eigh(gramian_2)
 
-    # Floor each axis before forming the outer product, so that directions with
-    # no data support are damped rather than amplified.
-    tiny = np.finfo(float).tiny
-    eigenvals_1 = np.maximum(eigenvals_1, 1e-12 * max(eigenvals_1.max(), tiny))
-    eigenvals_2 = np.maximum(eigenvals_2, 1e-12 * max(eigenvals_2.max(), tiny))
-    inv_diag = 1.0 / np.outer(eigenvals_1, eigenvals_2)
+    # Truncate unsupported directions instead of amplifying them. This makes the
+    # same preconditioning rule safe for both well-determined and gapped fits.
+    retained_1 = eigenvals_1 > rcond * max(eigenvals_1.max(), 0.0)
+    retained_2 = eigenvals_2 > rcond * max(eigenvals_2.max(), 0.0)
+    inv_1 = np.zeros_like(eigenvals_1)
+    inv_2 = np.zeros_like(eigenvals_2)
+    inv_1[retained_1] = 1.0 / eigenvals_1[retained_1]
+    inv_2[retained_2] = 1.0 / eigenvals_2[retained_2]
+    inv_diag = np.outer(inv_1, inv_2)
 
     def apply(residual):
         transformed = eigenvecs_1.T.conj() @ residual @ eigenvecs_2
@@ -3128,9 +3111,8 @@ def _pcg_normal_equations(matvec, precond, rhs, tol, iter_lim, x0=None):
     """
     Preconditioned conjugate gradients on a Hermitian positive-definite operator.
 
-    Uses the Polak-Ribiere+ formula for beta, which restarts automatically if
-    conjugacy is lost, and tracks the best iterate so that a stagnating run
-    degrades gracefully rather than diverging.
+    Uses the standard preconditioned-CG recurrence and tracks the best iterate
+    so that a stagnating run degrades gracefully rather than diverging.
 
     Parameters:
     ----------
@@ -3168,7 +3150,7 @@ def _pcg_normal_equations(matvec, precond, rhs, tol, iter_lim, x0=None):
 
     z = precond(residual)
     p = z.copy()
-    rz = np.vdot(residual, z)
+    rz = np.vdot(residual, z).real
     best_x, best_norm = x.copy(), np.linalg.norm(residual)
     converged, n_iter = best_norm <= tol * rhs_norm, 0
 
@@ -3188,9 +3170,12 @@ def _pcg_normal_equations(matvec, precond, rhs, tol, iter_lim, x0=None):
             converged = True
             break
         new_z = precond(new_residual)
-        beta = max(np.vdot(new_residual - residual, new_z).real, 0.0) / rz.real
+        new_rz = np.vdot(new_residual, new_z).real
+        if not np.isfinite(new_rz) or new_rz <= 0 or rz <= 0:
+            break
+        beta = new_rz / rz
         p = new_z + beta * p
-        residual, z, rz = new_residual, new_z, np.vdot(new_residual, new_z)
+        residual, z, rz = new_residual, new_z, new_rz
 
     return best_x, n_iter, converged, best_norm / rhs_norm
 
@@ -3202,27 +3187,26 @@ def sparse_linear_fit_2D(
     atol: float = 1e-10,
     btol: float = 1e-10,
     iter_lim: int = None,
-    precondition_solver: bool = False,
-    eigenspec_threshold: float = 1e-3,
     method: str = 'lsqr',
-    cg_tol: float = 1e-8,
     **kwargs
 ) -> np.ndarray:
     """
     Solves a sparse linear least-squares problem using Kronecker-structured basis.
 
-    This function fits the input `data` using a weighted least-squares approach, where
-    the design matrix is represented implicitly as the Kronecker product of `axis_1_basis`
-    and `axis_2_basis`. The solution is computed using `scipy.sparse.linalg.lsqr`. Note the
-    the convergence of the LSQR algorithm is not guaranteed for this problem, and highly
-    dependent on the conditioning of the basis/weighting matrices.
+    Fits `data` in the Kronecker product of `axis_1_basis` and `axis_2_basis`
+    by minimizing ``sum(weights * abs(data - model)**2)``. Separable whitening
+    is applied automatically when the weighted per-axis Gramians are well
+    conditioned. This can include narrow-basis fits across a large gap; it is
+    disabled once the enlarged basis develops near-null gap modes.
 
     Parameters:
     -----------
     data : np.ndarray
         A 2D array of size (m, n) representing the observed data to be fitted.
     weights : np.ndarray
-        A weight matrix of the same shape as `data`, applied element-wise.
+        A non-negative weight matrix of the same shape as `data`. These are the
+        weights in the least-squares objective (typically inverse variances),
+        not residual multipliers; their square root is applied internally.
     axis_1_basis : np.ndarray
         Fitting basis along the first axis, shape (m, i).
     axis_2_basis : np.ndarray
@@ -3233,88 +3217,35 @@ def sparse_linear_fit_2D(
         implicit Kronecker product of `axis_1_basis` and `axis_2_basis`, and b is the
         flattened `data` array, x is the solution, and r is the residual.
     iter_lim : int, optional
-        Maximum number of iterations for `lsqr`, default is None
-    precondition_solver : bool, optional, default False
-        If True, the solver will apply a preconditioner to the basis matrices before
-        solving the least-squares problem. This option is useful when the input weights
-        are frequency or time dependent and are either very large or very small, or when
-        the basis matrices are ill-conditioned due to large stretches of zeros.
-        The preconditioner is computed using the the inverse of the regularized Gramian
-        matrix (X^T W X) of the basis matrices. Prior to computing the inverse, the eigenvalues
-        of the Gramian matrix are regularized by adding a small value to the diagonal. This
-        value is calculated by computing the cumulative sum of the eigenvalues and selecting
-        the smallest value such that the cumulative sum of the largest eigenvalues is less than
-        1 - `eigenspec_threshold`. This helps to stabilize the computation of the inverse.
-    eigenspec_threshold : float, optional, default 1e-3
-        Regularization parameters for the eigenvalues of the Gramian matrix. This parameter
-        is used to compute the smallest value to add to the diagonal of the Gramian matrix
-        such that the cumulative sum of the largest eigenvalues is less than 1 - `eigenspec_threshold`.
-        This effectively sets the threshold for the smallest eigenvalue to include in the inverse.
-
-        .. note::
-            The additive ridge matters for rank-deficient Gramians (fully flagged
-            channels or integrations). Replacing it with a multiplicative eigenvalue
-            floor makes LSQR terminate early against a badly scaled operator, giving
-            chi^2 up to 1e5 times worse while reporting fewer iterations.
-    method : {'lsqr', 'cg'}, optional, default 'lsqr'
+        Maximum number of iterations, default is the scipy solver's default.
+    method : {'lsqr', 'lsmr', 'pcg'}, optional, default 'lsqr'
         Which iterative solver to use.
 
         ``'lsqr'``
-            `scipy.sparse.linalg.lsqr` on the implicit Kronecker operator. Stable
-            for rank-deficient problems, and returns the minimum-norm solution.
-        ``'cg'``
-            Conjugate gradients on the normal equations, preconditioned by the
-            leading Kronecker term of the exact factorisation of the normal
-            operator (see `_kron_normal_preconditioner`). Typically 5-20x faster
-            because it needs far fewer iterations, and `precondition_solver` and
-            `eigenspec_threshold` are ignored.
+            The conservative default. It is robust for rank-deficient problems
+            and large gaps, and its early stopping provides useful regularization.
+        ``'lsmr'``
+            Similar robustness to LSQR, but often somewhat faster. Prefer it for
+            a robust solve unless matching historical LSQR output is important.
+        ``'pcg'``
+            Preconditioned conjugate gradients on the normal equations. It is
+            usually fastest when the fit is well determined, such as stages
+            whose previously inpainted samples have nonzero weights. Use LSQR
+            or LSMR instead for the initial solve across a large contiguous gap.
 
         .. warning::
-            **Do not use ``'cg'`` for inpainting across large contiguous gaps.**
-
-            ``'cg'`` converges to the least-squares solution, which is the wrong
-            thing to want when the fit is underdetermined: it does not return the
-            minimum-norm solution, so the model is unconstrained inside a gap. It
-            reaches a *lower* chi^2 than ``'lsqr'`` while producing wildly larger
-            values where there is no data. Measured on a 400x300 waterfall with a
-            41x88 basis, comparing the recovered model inside a contiguous flagged
-            gap against the known truth:
-
-            ====================  ==================  ==================
-            gap width             'lsqr' rel. error   'cg' rel. error
-            ====================  ==================  ==================
-            10 channels           1.7e-03             1.7e-03
-            20 channels           7.7e-02             8.4e-02
-            40 channels           6.0e-01             3.2e+02
-            60 channels           7.2e-01             8.0e+03
-            100 channels          8.4e-01             1.2e+04
-            ====================  ==================  ==================
-
-            ``'lsqr'`` stays well behaved here because it hits `iter_lim` without
-            converging, and that early stopping acts as a regularizer. ``'cg'``
-            converges, and is worse for it.
-
-            ``'cg'`` is safe and much faster where the fit is well determined:
-            scattered flags, whole flagged integrations, interior gaps of order a
-            few DPSS periods, and up to 90% of samples flagged at random all
-            matched an exact dense minimum-norm solve to 4 decimal places.
-            Validate against ``'lsqr'`` on your own data before switching.
-            ``meta['converged']`` and ``meta['fellback']`` report what happened;
-            if CG fails to converge the solve is redone with LSQR.
-    cg_tol : float, optional, default 1e-8
-        Convergence tolerance for ``method='cg'``, on the relative residual of
-        the normal equations. This is not the same quantity as `atol`/`btol`;
-        empirically 1e-8 reproduces what LSQR returns at ``atol = btol = 1e-6``.
+            PCG can converge to an unstable solution when the measured data do
+            not constrain the model inside a gap. If PCG stalls, this function
+            warns and automatically retries with LSQR.
     **kwargs : dict
-        Additional keyword arguments passed to `scipy.sparse.linalg.lsqr`.
+        Additional keyword arguments passed to the selected scipy sparse solver.
 
     Returns:
     --------
     x : np.ndarray
         The computed least-squares solution of shape `(i, j)`.
     meta : dict
-        Dictionary containing additional information about the solution
-        from sparse.linalg.lsqr.
+        Solver diagnostics, including the method and iteration count.
     """
     if data.shape != weights.shape:
         raise ValueError(
@@ -3332,8 +3263,60 @@ def sparse_linear_fit_2D(
             f"the second dimension of `data` (shape: {data.shape})."
         )
 
-    if method not in ('lsqr', 'cg'):
-        raise ValueError(f"`method` must be 'lsqr' or 'cg', got {method!r}.")
+    if method == 'cg':
+        warn(
+            "method='cg' is deprecated; use method='pcg'.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        method = 'pcg'
+    if method not in ('lsqr', 'lsmr', 'pcg'):
+        raise ValueError(
+            f"`method` must be 'lsqr', 'lsmr', or 'pcg', got {method!r}."
+        )
+
+    normal_weights = np.asarray(weights)
+    if np.iscomplexobj(normal_weights) or not np.all(np.isfinite(normal_weights)) \
+            or np.any(normal_weights < 0):
+        raise ValueError("`weights` must be finite, real, and non-negative.")
+    normal_weights = np.asarray(normal_weights, dtype=float)
+    residual_weights = np.sqrt(normal_weights)
+
+    # Keep the old switch as an undocumented compatibility shim. The automatic
+    # safety rule below still wins when the problem has a missing axis.
+    old_precondition_solver = kwargs.pop('precondition_solver', None)
+    for old_option in (
+        'eigenspec_threshold', 'precondition_method', 'precondition_rcond'
+    ):
+        if old_option in kwargs:
+            kwargs.pop(old_option)
+            warn(
+                f"`{old_option}` is deprecated and ignored; whitening is now "
+                "automatic and rank-aware.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+    pcg_tol = kwargs.pop(
+        'pcg_tol', kwargs.pop('cg_tol', max(atol, btol, 1e-8))
+    )
+
+    # Whitening is close to ideal when the approximate per-axis Gramians are
+    # well conditioned. A gap is not itself disqualifying: a narrow DPSS basis
+    # can remain fully constrained across it. A wide basis develops near-null
+    # gap modes, in which case right preconditioning would change LSQR/LSMR's
+    # implicit regularization and is therefore disabled.
+    precondition_rcond = 1e-6
+    axis_1_wgts, axis_2_wgts = _leading_separable_weights(normal_weights)
+    axis_1_pcond, axis_1_full_rank = _inverse_sqrt_gramian(
+        axis_1_basis, axis_1_wgts, precondition_rcond, return_full_rank=True
+    )
+    axis_2_pcond, axis_2_full_rank = _inverse_sqrt_gramian(
+        axis_2_basis, axis_2_wgts, precondition_rcond, return_full_rank=True
+    )
+    whitening_is_safe = axis_1_full_rank and axis_2_full_rank
+    use_preconditioner = whitening_is_safe
+    if old_precondition_solver is False:
+        use_preconditioner = False
 
     # Define the shape of the implicit A matrix (Kronecker product of basis)
     full_operator_shape = (
@@ -3341,110 +3324,125 @@ def sparse_linear_fit_2D(
         axis_1_basis.shape[-1] * axis_2_basis.shape[-1],  # i * j
     )
 
-    # Diagnostics from a CG attempt that stalled and fell through to LSQR
+    # PCG is intended for well-determined stages. Avoid doing work (or risking
+    # null-space growth) when the approximate normal operator is rank deficient.
     meta_cg = None
+    if method == 'pcg' and not whitening_is_safe:
+        warn(
+            "PCG is unsafe because the weighted basis has near-null modes; "
+            "falling back to LSQR."
+        )
+        method = 'lsqr'
+        meta_cg = {'method': 'pcg', 'iter_num': 0, 'resid': np.nan,
+                   'converged': False, 'fellback': True}
 
-    if method == 'cg':
+    if method == 'pcg':
         nmode_1, nmode_2 = axis_1_basis.shape[-1], axis_2_basis.shape[-1]
 
-        # Normal equations: N(X) = A1^H (W**2 . (A1 X A2^H)) A2 = A1^H (W . D) ... A2
+        # Normal equations: N(X) = A1^H (W . (A1 X A2^T)) A2*.
+        # Applying this directly avoids the temporary flattened arrays and two
+        # square-root weight multiplications needed by matvec then rmatvec.
         def normal_matvec(X):
-            forward = _kron_matvec(X.ravel(), weights, axis_1_basis, axis_2_basis)
-            return _kron_rmatvec(
-                forward, weights, axis_1_basis, axis_2_basis
-            ).reshape(nmode_1, nmode_2)
+            return _kron_adjoint(
+                _kron_model(X, axis_1_basis, axis_2_basis) * normal_weights,
+                axis_1_basis, axis_2_basis
+            )
 
-        # A^H b, for the same b = W . data that LSQR is given. _kron_rmatvec
-        # applies the second factor of W, so this is A1^H (W**2 . data) A2
-        # without ever forming W**2 explicitly.
-        rhs = _kron_rmatvec(
-            (data * weights).ravel(), weights,
-            axis_1_basis, axis_2_basis
+        rhs = _kron_adjoint(
+            data * normal_weights, axis_1_basis, axis_2_basis
         ).reshape(nmode_1, nmode_2)
 
-        precond = _kron_normal_preconditioner(weights, axis_1_basis, axis_2_basis)
-        cg_x0 = kwargs.pop('x0', None)
+        precond = _kron_normal_preconditioner(
+            normal_weights, axis_1_basis, axis_2_basis, precondition_rcond
+        )
+        # Retain x0 in kwargs so an LSQR fallback starts from the same physical
+        # coefficient array rather than silently discarding the warm start.
+        cg_x0 = kwargs.get('x0', None)
         x, n_iter, converged, resid = _pcg_normal_equations(
-            normal_matvec, precond, rhs, cg_tol,
+            normal_matvec, precond, rhs, pcg_tol,
             iter_lim if iter_lim is not None else 10 * nmode_1 * nmode_2,
             x0=None if cg_x0 is None else np.reshape(cg_x0, (nmode_1, nmode_2))
         )
-        meta = {'iter_num': n_iter, 'converged': bool(converged),
-                'resid': float(resid), 'fellback': False}
+        meta = {'method': 'pcg', 'iter_num': n_iter, 'converged': bool(converged),
+                'resid': float(resid), 'fellback': False,
+                'preconditioned': True}
         if converged:
             return x, meta
 
-        # CG stalled (typically a badly underdetermined fit). Fall back to LSQR,
-        # which is stable in that regime and returns the minimum-norm solution.
+        # PCG stalled (typically a badly underdetermined fit). Fall back to LSQR,
+        # which is stable in that regime and preserves the historical behavior.
         warn(
-            f"Conjugate gradients did not converge (relative residual {resid:.3e} "
+            f"PCG did not converge (relative residual {resid:.3e} "
             f"after {n_iter} iterations); falling back to LSQR. This usually means "
             f"the fit is underdetermined."
         )
         method = 'lsqr'
         meta_cg = meta
 
-    if precondition_solver:
-        # Compute separate preconditioners for the two axes
-        # Start by computing separable weights for the two axes
-        with np.errstate(invalid='ignore'):
-            axis_1_wgts = np.nanmean(
-                np.where(weights == 0, np.nan, weights),
-                axis=1, keepdims=True
-            )
-            axis_2_wgts = np.nanmean(
-                np.where(weights == 0, np.nan, weights / axis_1_wgts),
-                axis=0, keepdims=True
-            )
-        axis_1_wgts[~np.isfinite(axis_1_wgts)] = 0.0
-        axis_2_wgts[~np.isfinite(axis_2_wgts)] = 0.0
-        axis_1_wgts = np.squeeze(axis_1_wgts)
-        axis_2_wgts = np.squeeze(axis_2_wgts)
-
-
-        # Compute the preconditioners for the two axes
-        axis_1_pcond = _regularized_inverse_gramian(
-            axis_1_basis, axis_1_wgts, eigenspec_threshold
-        )
-        axis_2_pcond = _regularized_inverse_gramian(
-            axis_2_basis, axis_2_wgts, eigenspec_threshold
-        )
-
+    if use_preconditioner:
         axis_1_basis = np.dot(axis_1_basis, axis_1_pcond)
         axis_2_basis = np.dot(axis_2_basis, axis_2_pcond)
+
+        # scipy's x0 is expressed in solver coordinates. Callers of this API
+        # supply coefficients in the original bases, so transform the warm
+        # start through the two right preconditioners.
+        if kwargs.get('x0') is not None:
+            nmode_1, nmode_2 = axis_1_basis.shape[-1], axis_2_basis.shape[-1]
+            x0 = np.reshape(kwargs['x0'], (nmode_1, nmode_2))
+            transformed_x0 = np.linalg.lstsq(
+                axis_1_pcond, x0, rcond=None
+            )[0]
+            transformed_x0 = np.linalg.lstsq(
+                axis_2_pcond, transformed_x0.T, rcond=None
+            )[0].T
+            kwargs['x0'] = transformed_x0.ravel()
 
     # Define the implicit LinearOperator representing the Kronecker product
     linear_operator = sparse.linalg.LinearOperator(
         full_operator_shape,
-        matvec=lambda v: _kron_matvec(v, weights, axis_1_basis, axis_2_basis),
-        rmatvec=lambda u: _kron_rmatvec(u, weights, axis_1_basis, axis_2_basis),
+        matvec=lambda v: _kron_matvec(
+            v, residual_weights, axis_1_basis, axis_2_basis
+        ),
+        rmatvec=lambda u: _kron_rmatvec(
+            u, residual_weights, axis_1_basis, axis_2_basis
+        ),
+        dtype=np.result_type(
+            data.dtype, normal_weights.dtype,
+            axis_1_basis.dtype, axis_2_basis.dtype
+        ),
     )
-    meta = {}
-    # Solve the least-squares problem using LSQR
-    (
-        x,
-        meta['istop'],
-        meta['iter_num'],
-        *_
-    )= sparse.linalg.lsqr(
-        A=linear_operator,
-        b=(data * weights).ravel(),
-        atol=atol,
-        btol=btol,
-        iter_lim=iter_lim,
-        **kwargs
-    )
+    meta = {'method': method, 'preconditioned': bool(use_preconditioner)}
+    if method == 'lsmr':
+        x, meta['istop'], meta['iter_num'], *_ = sparse.linalg.lsmr(
+            A=linear_operator,
+            b=(data * residual_weights).ravel(),
+            atol=atol,
+            btol=btol,
+            maxiter=iter_lim,
+            **kwargs
+        )
+    else:
+        x, meta['istop'], meta['iter_num'], *_ = sparse.linalg.lsqr(
+            A=linear_operator,
+            b=(data * residual_weights).ravel(),
+            atol=atol,
+            btol=btol,
+            iter_lim=iter_lim,
+            **kwargs
+        )
 
     # Reshape output
     x = x.reshape(axis_1_basis.shape[-1], axis_2_basis.shape[-1])
 
-    if precondition_solver:
-        x = np.dot(axis_1_pcond, x).dot(axis_2_pcond)
+    if use_preconditioner:
+        # The model uses axis_2_basis.T (not its Hermitian transpose), hence the
+        # coefficient-coordinate map also needs the ordinary transpose here.
+        x = np.dot(axis_1_pcond, x).dot(axis_2_pcond.T)
 
-    # Preserve the CG diagnostics if we got here via the fallback
+    # Preserve the PCG diagnostics if we got here via the fallback
     if meta_cg is not None:
-        meta.update(cg_iter_num=meta_cg['iter_num'], cg_resid=meta_cg['resid'],
-                    converged=False, fellback=True)
+        meta.update(pcg_iter_num=meta_cg['iter_num'], pcg_resid=meta_cg['resid'],
+                    requested_method='pcg', converged=False, fellback=True)
 
     return x, meta
 

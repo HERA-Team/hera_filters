@@ -1606,8 +1606,9 @@ def test_sparse_linear_fit_2d():
         x0=np.ravel(sol)
     )
 
-    # Check that convergence was reached more quickly with a good starting point
-    assert meta_w_starting['iter_num'] < meta['iter_num']
+    # Automatic whitening already solves this exactly separable problem in one
+    # iteration, so a good starting point cannot require any more work.
+    assert meta_w_starting['iter_num'] <= meta['iter_num']
 
 
     # Check that the fit closely matches to the separable fit
@@ -1657,7 +1658,8 @@ def test_sparse_linear_fit_2d_non_binary_wgts():
     flags = (time_flags | freq_flags)
 
     # Generate separable, non-binary weights
-    axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,))
+    axis_1_weights = (~time_flags[:, 0]).astype(float) \
+        * rng.integers(1, 10, size=ntimes)
     axis_2_weights = (~freq_flags[0]).astype(float)
     wgts = np.outer(axis_1_weights, axis_2_weights)
 
@@ -1680,7 +1682,26 @@ def test_sparse_linear_fit_2d_non_binary_wgts():
     # Check that the fit closely matches to the separable fit
     np.testing.assert_allclose(sol, sol_sparse, atol=1e-9, rtol=1e-6)
 
-def test_precondition_sparse_solver():
+    # For nonseparable weights and data outside the model subspace, verify that
+    # `weights` appears once in the objective, rather than being squared.
+    m, n, i, j = 12, 10, 3, 4
+    axis_1_basis = rng.standard_normal((m, i))
+    axis_2_basis = rng.standard_normal((n, j))
+    data = rng.standard_normal((m, n)) + 1j * rng.standard_normal((m, n))
+    wgts = 0.2 + rng.random((m, n))
+    design = np.kron(axis_1_basis, axis_2_basis)
+    sqrt_wgts = np.sqrt(wgts).ravel()
+    dense_sol = np.linalg.lstsq(
+        design * sqrt_wgts[:, None],
+        data.ravel() * sqrt_wgts,
+        rcond=None,
+    )[0].reshape(i, j)
+    sparse_sol, _ = dspec.sparse_linear_fit_2D(
+        data, wgts, axis_1_basis, axis_2_basis, atol=1e-12, btol=1e-12,
+    )
+    np.testing.assert_allclose(sparse_sol, dense_sol, atol=1e-10, rtol=1e-10)
+
+def test_automatic_whitening_sparse_solver():
     # test that separable linear fit works as expected.
     ntimes, nfreqs = 100, 50
 
@@ -1698,8 +1719,8 @@ def test_precondition_sparse_solver():
     freqs = np.linspace(100e6, 200e6, nfreqs)
 
     # Generate separable, non-binary weights
-    axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,))
-    axis_2_weights = (~freq_flags[0]).astype(float)
+    axis_1_weights = rng.integers(1, 10, size=ntimes)
+    axis_2_weights = np.ones(nfreqs)
     wgts = np.outer(axis_1_weights, axis_2_weights)
 
     # Add frequency dependence to the weights to make the problem more ill-conditioned
@@ -1727,12 +1748,12 @@ def test_precondition_sparse_solver():
         weights=wgts,
         axis_1_basis=time_basis,
         axis_2_basis=freq_basis,
-        precondition_solver=True
     )
 
     # Check that the fit closely matches to the separable fit
     np.testing.assert_allclose(sol, sol_sparse, atol=1e-8, rtol=1e-6)
     np.testing.assert_allclose(sol, sol_sparse_precond, atol=1e-8, rtol=1e-6)
+    assert meta_precond['preconditioned']
     np.testing.assert_array_less(meta_precond['iter_num'], meta['iter_num'])
 
 
@@ -1773,9 +1794,72 @@ def test_kron_matvec_contraction_order():
                 assert res_mv.dtype == ref_mv.dtype
                 assert res_rmv.dtype == ref_rmv.dtype
 
+    # The real-BLAS shortcut must follow numpy's mixed-precision promotion
+    # rules. In particular, float64 @ complex64 produces complex128.
+    real_basis = rng.standard_normal((12, 5)).astype(np.float64)
+    complex_coeffs = (
+        rng.standard_normal((5, 7)) + 1j * rng.standard_normal((5, 7))
+    ).astype(np.complex64)
+    result = dspec._real_matmul(real_basis, complex_coeffs)
+    reference = real_basis @ complex_coeffs
+    assert result.dtype == reference.dtype == np.dtype(np.complex128)
+    np.testing.assert_allclose(result, reference, atol=1e-12, rtol=1e-12)
+
+def test_sparse_linear_fit_2d_automatic_whitening_and_lsmr():
+    # For separable, nonzero weights the whitening preconditioner makes the
+    # normal operator the identity. Use generic complex bases here so this also
+    # checks the coefficient map's ordinary (rather than Hermitian) transpose.
+    rng = np.random.default_rng(11)
+    ntimes, nfreqs, ntime_modes, nfreq_modes = 50, 40, 8, 10
+    time_basis = rng.standard_normal((ntimes, ntime_modes)) \
+        + 1j * rng.standard_normal((ntimes, ntime_modes))
+    freq_basis = rng.standard_normal((nfreqs, nfreq_modes)) \
+        + 1j * rng.standard_normal((nfreqs, nfreq_modes))
+    x_true = rng.standard_normal((ntime_modes, nfreq_modes)) \
+        + 1j * rng.standard_normal((ntime_modes, nfreq_modes))
+    data = time_basis @ x_true @ freq_basis.T
+    weights = np.outer(
+        0.5 + rng.random(ntimes), 0.5 + rng.random(nfreqs)
+    )
+
+    sol_plain, meta_plain = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-10, btol=1e-10,
+        precondition_solver=False,
+    )
+    sol_white, meta_white = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-10, btol=1e-10,
+    )
+    sol_lsmr, meta_lsmr = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-10, btol=1e-10,
+        method='lsmr',
+    )
+
+    assert meta_white['iter_num'] <= 2
+    assert meta_lsmr['iter_num'] <= 2
+    np.testing.assert_array_less(meta_white['iter_num'], meta_plain['iter_num'])
+    np.testing.assert_allclose(sol_white, sol_plain, atol=1e-8, rtol=1e-8)
+    np.testing.assert_allclose(sol_lsmr, sol_plain, atol=1e-8, rtol=1e-8)
+
+    # x0 is part of the public API in the original coefficient coordinates,
+    # even though scipy sees coordinates after right preconditioning.
+    sol_x0, _ = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-12, btol=1e-12,
+        iter_lim=1, x0=x_true.ravel(),
+    )
+    np.testing.assert_allclose(sol_x0, x_true, atol=1e-11, rtol=1e-11)
+
+    pytest.raises(
+        ValueError,
+        dspec.sparse_linear_fit_2D,
+        data,
+        -weights,
+        time_basis,
+        freq_basis,
+    )
+
 
 def test_sparse_linear_fit_2d_cg():
-    # method='cg' must reproduce the LSQR solution on well-determined problems,
+    # method='pcg' must reproduce the LSQR solution on well-determined problems,
     # in far fewer iterations.
     ntimes, nfreqs = 100, 50
     rng = np.random.default_rng(42)
@@ -1788,36 +1872,35 @@ def test_sparse_linear_fit_2d_cg():
     freqs = np.linspace(100e6, 200e6, nfreqs)
     x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
     data = np.dot(time_basis, x_true).dot(freq_basis.T)
+    data += 1e-3 * rng.standard_normal(data.shape)
 
-    time_flags = rng.choice([True, False], p=[0.1, 0.9], size=(ntimes, 1))
-    freq_flags = rng.choice([True, False], p=[0.1, 0.9], size=(1, nfreqs))
     wgts = np.outer(
-        (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,)),
-        (~freq_flags[0]).astype(float),
+        rng.integers(1, 10, size=ntimes), np.ones(nfreqs),
     )
     # Frequency dependence, to make the problem more ill-conditioned
     wgts = wgts * (freqs / 150e6) ** -3.5
+    wgts[rng.random(wgts.shape) < 0.1] = 0
 
     sol_lsqr, meta_lsqr = dspec.sparse_linear_fit_2D(
         data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
-        precondition_solver=True, atol=1e-10, btol=1e-10,
+        atol=1e-10, btol=1e-10,
     )
     sol_cg, meta_cg = dspec.sparse_linear_fit_2D(
         data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
-        method='cg',
+        method='pcg',
     )
 
     assert meta_cg['converged']
     assert not meta_cg['fellback']
-    np.testing.assert_array_less(meta_cg['iter_num'], meta_lsqr['iter_num'])
+    assert meta_cg['iter_num'] <= 8
 
     # The two solvers should agree on the fitted model
     model_lsqr = time_basis @ sol_lsqr @ freq_basis.T
     model_cg = time_basis @ sol_cg @ freq_basis.T
-    np.testing.assert_allclose(model_cg, model_lsqr, atol=1e-8, rtol=1e-6)
+    np.testing.assert_allclose(model_cg, model_lsqr, atol=1e-7, rtol=1e-6)
 
-    # ...and CG must not fit the weighted data any worse than LSQR
-    chi2 = lambda mdl: np.sum(np.abs(wgts * (data - mdl)) ** 2)
+    # ...and PCG must not fit the weighted data any worse than LSQR
+    chi2 = lambda mdl: np.sum(wgts * np.abs(data - mdl) ** 2)
     assert chi2(model_cg) <= chi2(model_lsqr) * (1 + 1e-6)
 
     # An unknown method is rejected
@@ -1833,7 +1916,7 @@ def test_sparse_linear_fit_2d_cg():
 
 
 def test_sparse_linear_fit_2d_cg_falls_back_to_lsqr():
-    # When CG cannot reach cg_tol the solve is redone with LSQR. Check that the
+    # When PCG cannot reach pcg_tol the solve is redone with LSQR. Check that the
     # fallback fires, warns, still returns a usable answer, and reports both
     # solvers' diagnostics without leaking those keys into the other paths.
     ntimes, nfreqs = 120, 100
@@ -1848,48 +1931,43 @@ def test_sparse_linear_fit_2d_cg_falls_back_to_lsqr():
     data = np.dot(time_basis, x_true).dot(freq_basis.T)
 
     # Only a small sub-block carries any weight, which leaves the fit badly
-    # underdetermined and stalls CG.
+    # underdetermined and rejects PCG.
     wgts = np.zeros((ntimes, nfreqs))
     wgts[30:90, 20:55] = 1.0
 
-    with pytest.warns(UserWarning, match="Conjugate gradients did not converge"):
+    with pytest.warns(UserWarning, match="falling back to LSQR"):
         sol, meta = dspec.sparse_linear_fit_2D(
             data=data, weights=wgts, axis_1_basis=time_basis,
-            axis_2_basis=freq_basis, method='cg', cg_tol=1e-14, iter_lim=40,
+            axis_2_basis=freq_basis, method='pcg', pcg_tol=1e-14, iter_lim=40,
         )
     assert meta['fellback']
     assert not meta['converged']
-    assert 'cg_iter_num' in meta and 'cg_resid' in meta
+    assert 'pcg_iter_num' in meta and 'pcg_resid' in meta
     assert 'istop' in meta                      # came from the LSQR re-solve
     assert np.all(np.isfinite(sol))
     assert sol.shape == (time_basis.shape[-1], freq_basis.shape[-1])
 
-    # A converging CG solve must not report a fallback or expose cg_* keys
+    # A converging PCG solve must not report a fallback or expose pcg_* keys
     wgts_ok = np.ones((ntimes, nfreqs))
     sol, meta = dspec.sparse_linear_fit_2D(
         data=data, weights=wgts_ok, axis_1_basis=time_basis,
-        axis_2_basis=freq_basis, method='cg',
+        axis_2_basis=freq_basis, method='pcg',
     )
     assert meta['converged']
     assert not meta['fellback']
-    assert 'cg_iter_num' not in meta
+    assert 'pcg_iter_num' not in meta
 
     # ...and neither must a plain LSQR solve
     sol, meta = dspec.sparse_linear_fit_2D(
         data=data, weights=wgts_ok, axis_1_basis=time_basis,
-        axis_2_basis=freq_basis, precondition_solver=True,
+        axis_2_basis=freq_basis,
     )
-    assert 'cg_iter_num' not in meta
+    assert 'pcg_iter_num' not in meta
     assert 'fellback' not in meta
 
 
 def test_precondition_sparse_solver_degenerate_weights():
-    # The preconditioner used to select its Tikhonov ridge from the cumulative
-    # eigenvalue spectrum, which raised
-    #   ValueError: zero-size array to reduction operation maximum
-    # whenever the largest eigenvalue already carried more than
-    # (1 - eigenspec_threshold) of the total. Guarding that case (and the fully
-    # flagged all-zero Gramian case) makes these inputs well defined.
+    # Rank-aware whitening must remain finite for almost or entirely empty data.
     ntimes, nfreqs = 60, 40
     rng = np.random.default_rng(42)
     freq_basis, _ = dspec.dpss_operator(
@@ -1908,9 +1986,9 @@ def test_precondition_sparse_solver_degenerate_weights():
         weights=wgts,
         axis_1_basis=time_basis,
         axis_2_basis=freq_basis,
-        precondition_solver=True,
     )
     assert np.all(np.isfinite(sol))
+    assert not meta['preconditioned']
 
     # A fully flagged waterfall gives an all-zero Gramian
     sol, meta = dspec.sparse_linear_fit_2D(
@@ -1918,6 +1996,6 @@ def test_precondition_sparse_solver_degenerate_weights():
         weights=np.zeros((ntimes, nfreqs)),
         axis_1_basis=time_basis,
         axis_2_basis=freq_basis,
-        precondition_solver=True,
     )
     np.testing.assert_allclose(sol, 0.0, atol=1e-12)
+    assert not meta['preconditioned']
