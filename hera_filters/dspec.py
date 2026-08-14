@@ -3016,13 +3016,9 @@ def _leading_separable_weights(weights: np.ndarray):
     for _ in range(30):
         axis_1_vec = weights @ axis_2_vec
         norm = np.linalg.norm(axis_1_vec)
-        if not norm > 0:
-            return np.zeros(weights.shape[0]), np.zeros(weights.shape[1])
         axis_1_vec /= norm
         new_axis_2_vec = weights.T @ axis_1_vec
         norm = np.linalg.norm(new_axis_2_vec)
-        if not norm > 0:
-            return np.zeros(weights.shape[0]), np.zeros(weights.shape[1])
         new_axis_2_vec /= norm
         if np.linalg.norm(new_axis_2_vec - axis_2_vec) < 1e-10:
             axis_2_vec = new_axis_2_vec

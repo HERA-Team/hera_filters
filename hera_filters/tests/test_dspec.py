@@ -1857,6 +1857,60 @@ def test_sparse_linear_fit_2d_automatic_whitening_and_lsmr():
         freq_basis,
     )
 
+    with pytest.warns(DeprecationWarning) as legacy_warnings:
+        legacy_sol, _ = dspec.sparse_linear_fit_2D(
+            data, weights, time_basis, freq_basis,
+            eigenspec_threshold=1e-3,
+            precondition_method="legacy",
+            precondition_rcond=1e-8,
+        )
+    assert len(legacy_warnings) == 3
+    np.testing.assert_allclose(legacy_sol, sol_white, atol=1e-8, rtol=1e-8)
+
+
+def test_pcg_helper_breakdown_guards():
+    rhs = np.ones((2, 1))
+    identity = lambda x: x
+
+    # A zero right-hand side exits without entering the iteration.
+    solution, n_iter, converged, residual = dspec._pcg_normal_equations(
+        identity, identity, np.zeros_like(rhs), 1e-8, 4,
+        x0=np.ones_like(rhs),
+    )
+    np.testing.assert_allclose(solution, 1)
+    assert (n_iter, converged, residual) == (0, True, 0.0)
+
+    # A non-positive curvature direction cannot be used by CG.
+    solution, n_iter, converged, residual = dspec._pcg_normal_equations(
+        lambda x: -x, identity, rhs, 1e-8, 4,
+    )
+    np.testing.assert_allclose(solution, 0)
+    assert n_iter == 1
+    assert not converged
+    assert residual == 1
+
+    # Likewise, stop if preconditioning produces a non-positive inner product.
+    calls = 0
+
+    def changing_preconditioner(x):
+        nonlocal calls
+        calls += 1
+        return x if calls == 1 else -x
+
+    d = np.array([[1.0], [2.0]])
+    solution, n_iter, converged, residual = dspec._pcg_normal_equations(
+        lambda x: d * x, changing_preconditioner, rhs, 1e-8, 4,
+    )
+    assert np.all(np.isfinite(solution))
+    assert n_iter == 1
+    assert not converged
+    assert residual < 1
+
+    zero_preconditioner = dspec._kron_normal_preconditioner(
+        np.zeros((3, 4)), np.ones((3, 1)), np.ones((4, 1)), 1e-6,
+    )
+    np.testing.assert_allclose(zero_preconditioner(np.ones((1, 1))), 0)
+
 
 def test_sparse_linear_fit_2d_cg():
     # method='pcg' must reproduce the LSQR solution on well-determined problems,
@@ -1903,6 +1957,24 @@ def test_sparse_linear_fit_2d_cg():
     chi2 = lambda mdl: np.sum(wgts * np.abs(data - mdl) ** 2)
     assert chi2(model_cg) <= chi2(model_lsqr) * (1 + 1e-6)
 
+    # A physical-coordinate warm start is accepted on the PCG path.
+    sol_cg_x0, meta_cg_x0 = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts, axis_1_basis=time_basis,
+        axis_2_basis=freq_basis, method='pcg', x0=sol_lsqr.ravel(),
+    )
+    assert meta_cg_x0['converged']
+    model_cg_x0 = time_basis @ sol_cg_x0 @ freq_basis.T
+    np.testing.assert_allclose(model_cg_x0, model_lsqr, atol=1e-7, rtol=1e-6)
+
+    # Keep the old spelling as a deprecated compatibility alias.
+    with pytest.warns(DeprecationWarning, match="method='cg' is deprecated"):
+        sol_cg_alias, meta_cg_alias = dspec.sparse_linear_fit_2D(
+            data=data, weights=wgts, axis_1_basis=time_basis,
+            axis_2_basis=freq_basis, method='cg',
+        )
+    assert meta_cg_alias['method'] == 'pcg'
+    np.testing.assert_allclose(sol_cg_alias, sol_cg, atol=1e-7, rtol=1e-6)
+
     # An unknown method is rejected
     pytest.raises(
         ValueError,
@@ -1915,7 +1987,7 @@ def test_sparse_linear_fit_2d_cg():
     )
 
 
-def test_sparse_linear_fit_2d_cg_falls_back_to_lsqr():
+def test_sparse_linear_fit_2d_cg_falls_back_to_lsqr(monkeypatch):
     # When PCG cannot reach pcg_tol the solve is redone with LSQR. Check that the
     # fallback fires, warns, still returns a usable answer, and reports both
     # solvers' diagnostics without leaking those keys into the other paths.
@@ -1964,6 +2036,23 @@ def test_sparse_linear_fit_2d_cg_falls_back_to_lsqr():
     )
     assert 'pcg_iter_num' not in meta
     assert 'fellback' not in meta
+
+    # Exercise a genuine iterative stall separately from the rank-aware early
+    # rejection above, and verify that it also retries with LSQR.
+    def stalled_pcg(matvec, precond, rhs, tol, iter_lim, x0=None):
+        return np.zeros_like(rhs), 3, False, 0.25
+
+    with monkeypatch.context() as patch:
+        patch.setattr(dspec, '_pcg_normal_equations', stalled_pcg)
+        with pytest.warns(UserWarning, match="PCG did not converge"):
+            sol_stalled, meta_stalled = dspec.sparse_linear_fit_2D(
+                data=data, weights=wgts_ok, axis_1_basis=time_basis,
+                axis_2_basis=freq_basis, method='pcg',
+            )
+    assert np.all(np.isfinite(sol_stalled))
+    assert meta_stalled['fellback']
+    assert meta_stalled['pcg_iter_num'] == 3
+    assert meta_stalled['pcg_resid'] == 0.25
 
 
 def test_precondition_sparse_solver_degenerate_weights():
