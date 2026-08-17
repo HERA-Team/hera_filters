@@ -2154,6 +2154,10 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
         weight_batch = np.ascontiguousarray(wgts[start:stop])
         nrows = stop - start
 
+        # Each row is an independent weighted least-squares problem.  When the
+        # basis is real, solve the real and imaginary data together with real
+        # BLAS.  A nonzero-centered DPSS basis is complex and follows the
+        # unsplit complex path instead.
         split_complex_data = basis_is_real and np.iscomplexobj(data_batch)
         if split_complex_data:
             solve_data = np.ascontiguousarray(
@@ -2166,6 +2170,9 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
             solve_data = data_batch
             solve_weights = weight_batch
 
+        # Form b = A^H W y and the Jacobi diagonal diag(A^H W A) for every
+        # row in the batch.  The ridge term follows the convention used by the
+        # direct DPSS solvers: scale the unregularized normal diagonal.
         rhs = (solve_weights * solve_data) @ basis_conj
         unregularized_diagonal = solve_weights @ basis_power
         preconditioner_diagonal = (
@@ -2179,10 +2186,13 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
         )
 
         # Jacobi is exact for an unflagged orthonormal DPSS basis and remains
-        # a useful initial approximation for smoothly varying weights.
+        # a useful initial approximation for smoothly varying weights.  Use
+        # M^-1 b as the initial coefficient estimate as well as the
+        # preconditioner applied during CG.
         coefficients = rhs * inverse_diagonal
 
         def apply_normal(vector):
+            """Apply (A^H W A + ridge) to all coefficient rows."""
             result = (
                 (vector @ basis_transpose) * solve_weights
             ) @ basis_conj
@@ -2199,6 +2209,10 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
         rhs_preconditioned_norm_sq = np.sum(
             np.conj(rhs) * (rhs * inverse_diagonal), axis=1
         ).real
+        # Track convergence independently for each row using
+        # ||r||_{M^-1} / ||b||_{M^-1}.  Completed rows are removed from the
+        # active mask while the remaining rows continue in the same batched
+        # matrix multiplications.
         target_residual_sq = tol ** 2 * rhs_preconditioned_norm_sq
         active = rz > target_residual_sq
         failed = np.zeros(solve_data.shape[0], dtype=bool)
@@ -2212,6 +2226,8 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
             curvature = np.sum(
                 np.conj(direction) * normal_direction, axis=1
             ).real
+            # Non-positive or non-finite curvature indicates a CG breakdown
+            # for that row.  Mark it failed without interrupting other rows.
             usable = (
                 active
                 & np.isfinite(curvature)
@@ -2264,6 +2280,8 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
         )
 
         if split_complex_data:
+            # Recombine the paired real systems into one complex solution and
+            # report the worse convergence result from each pair.
             complex_coefficients = (
                 coefficients[:nrows] + 1j * coefficients[nrows:]
             )
@@ -3620,13 +3638,6 @@ def sparse_linear_fit_2D(
             f"the second dimension of `data` (shape: {data.shape})."
         )
 
-    if method == 'cg':
-        warn(
-            "method='cg' is deprecated; use method='pcg'.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        method = 'pcg'
     if method not in ('lsqr', 'lsmr', 'pcg'):
         raise ValueError(
             f"`method` must be 'lsqr', 'lsmr', or 'pcg', got {method!r}."
@@ -3646,20 +3657,15 @@ def sparse_linear_fit_2D(
     # Keep the old switch as an undocumented compatibility shim. The automatic
     # safety rule below still wins when the problem has a missing axis.
     old_precondition_solver = kwargs.pop('precondition_solver', None)
-    for old_option in (
-        'eigenspec_threshold', 'precondition_method'
-    ):
-        if old_option in kwargs:
-            kwargs.pop(old_option)
-            warn(
-                f"`{old_option}` is deprecated and ignored; whitening is now "
-                "automatic and rank-aware.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-    pcg_tol = kwargs.pop(
-        'pcg_tol', kwargs.pop('cg_tol', max(atol, btol, 1e-8))
-    )
+    if 'eigenspec_threshold' in kwargs:
+        kwargs.pop('eigenspec_threshold')
+        warn(
+            "`eigenspec_threshold` is deprecated and ignored; whitening is "
+            "now automatic and rank-aware.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    pcg_tol = kwargs.pop('pcg_tol', max(atol, btol, 1e-8))
 
     # Whitening is close to ideal when the approximate per-axis Gramians are
     # well conditioned. A gap is not itself disqualifying: a narrow DPSS basis
@@ -3686,15 +3692,15 @@ def sparse_linear_fit_2D(
 
     # PCG is intended for well-determined stages. Avoid doing work (or risking
     # null-space growth) when the approximate normal operator is rank deficient.
-    meta_cg = None
+    meta_pcg = None
     if method == 'pcg' and not whitening_is_safe:
         warn(
             "PCG is unsafe because the weighted basis has near-null modes; "
             "falling back to LSQR."
         )
         method = 'lsqr'
-        meta_cg = {'method': 'pcg', 'iter_num': 0, 'resid': np.nan,
-                   'converged': False, 'fellback': True}
+        meta_pcg = {'method': 'pcg', 'iter_num': 0, 'resid': np.nan,
+                    'converged': False, 'fellback': True}
 
     if method == 'pcg':
         nmode_1, nmode_2 = axis_1_basis.shape[-1], axis_2_basis.shape[-1]
@@ -3717,11 +3723,13 @@ def sparse_linear_fit_2D(
         )
         # Retain x0 in kwargs so an LSQR fallback starts from the same physical
         # coefficient array rather than silently discarding the warm start.
-        cg_x0 = kwargs.get('x0', None)
+        pcg_x0 = kwargs.get('x0', None)
         x, n_iter, converged, resid = _pcg_normal_equations(
             normal_matvec, precond, rhs, pcg_tol,
             iter_lim if iter_lim is not None else 10 * nmode_1 * nmode_2,
-            x0=None if cg_x0 is None else np.reshape(cg_x0, (nmode_1, nmode_2))
+            x0=None if pcg_x0 is None else np.reshape(
+                pcg_x0, (nmode_1, nmode_2)
+            )
         )
         meta = {'method': 'pcg', 'iter_num': n_iter, 'converged': bool(converged),
                 'resid': float(resid), 'fellback': False,
@@ -3738,7 +3746,7 @@ def sparse_linear_fit_2D(
             f"the fit is underdetermined."
         )
         method = 'lsqr'
-        meta_cg = meta
+        meta_pcg = meta
 
     if use_preconditioner:
         axis_1_basis = np.dot(axis_1_basis, axis_1_pcond)
@@ -3802,8 +3810,8 @@ def sparse_linear_fit_2D(
         x = np.dot(axis_1_pcond, x).dot(axis_2_pcond.T)
 
     # Preserve the PCG diagnostics if we got here via the fallback
-    if meta_cg is not None:
-        meta.update(pcg_iter_num=meta_cg['iter_num'], pcg_resid=meta_cg['resid'],
+    if meta_pcg is not None:
+        meta.update(pcg_iter_num=meta_pcg['iter_num'], pcg_resid=meta_pcg['resid'],
                     requested_method='pcg', converged=False, fellback=True)
 
     return x, meta

@@ -2024,10 +2024,9 @@ def test_sparse_linear_fit_2d_automatic_whitening_and_lsmr():
         legacy_sol, legacy_meta = dspec.sparse_linear_fit_2D(
             data, weights, time_basis, freq_basis,
             eigenspec_threshold=1e-3,
-            precondition_method="legacy",
             precondition_rcond=1e-8,
         )
-    assert len(legacy_warnings) == 2
+    assert len(legacy_warnings) == 1
     assert legacy_meta['precondition_rcond'] == 1e-8
     np.testing.assert_allclose(legacy_sol, sol_white, atol=1e-8, rtol=1e-8)
 
@@ -2115,7 +2114,7 @@ def test_pcg_helper_breakdown_guards():
     np.testing.assert_allclose(zero_preconditioner(np.ones((1, 1))), 0)
 
 
-def test_sparse_linear_fit_2d_cg():
+def test_sparse_linear_fit_2d_pcg():
     # method='pcg' must reproduce the LSQR solution on well-determined problems,
     # in far fewer iterations.
     ntimes, nfreqs = 100, 50
@@ -2142,41 +2141,32 @@ def test_sparse_linear_fit_2d_cg():
         data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
         atol=1e-10, btol=1e-10,
     )
-    sol_cg, meta_cg = dspec.sparse_linear_fit_2D(
+    sol_pcg, meta_pcg = dspec.sparse_linear_fit_2D(
         data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
         method='pcg',
     )
 
-    assert meta_cg['converged']
-    assert not meta_cg['fellback']
-    assert meta_cg['iter_num'] <= 8
+    assert meta_pcg['converged']
+    assert not meta_pcg['fellback']
+    assert meta_pcg['iter_num'] <= 8
 
     # The two solvers should agree on the fitted model
     model_lsqr = time_basis @ sol_lsqr @ freq_basis.T
-    model_cg = time_basis @ sol_cg @ freq_basis.T
-    np.testing.assert_allclose(model_cg, model_lsqr, atol=1e-7, rtol=1e-6)
+    model_pcg = time_basis @ sol_pcg @ freq_basis.T
+    np.testing.assert_allclose(model_pcg, model_lsqr, atol=1e-7, rtol=1e-6)
 
     # ...and PCG must not fit the weighted data any worse than LSQR
     chi2 = lambda mdl: np.sum(wgts * np.abs(data - mdl) ** 2)
-    assert chi2(model_cg) <= chi2(model_lsqr) * (1 + 1e-6)
+    assert chi2(model_pcg) <= chi2(model_lsqr) * (1 + 1e-6)
 
     # A physical-coordinate warm start is accepted on the PCG path.
-    sol_cg_x0, meta_cg_x0 = dspec.sparse_linear_fit_2D(
+    sol_pcg_x0, meta_pcg_x0 = dspec.sparse_linear_fit_2D(
         data=data, weights=wgts, axis_1_basis=time_basis,
         axis_2_basis=freq_basis, method='pcg', x0=sol_lsqr.ravel(),
     )
-    assert meta_cg_x0['converged']
-    model_cg_x0 = time_basis @ sol_cg_x0 @ freq_basis.T
-    np.testing.assert_allclose(model_cg_x0, model_lsqr, atol=1e-7, rtol=1e-6)
-
-    # Keep the old spelling as a deprecated compatibility alias.
-    with pytest.warns(DeprecationWarning, match="method='cg' is deprecated"):
-        sol_cg_alias, meta_cg_alias = dspec.sparse_linear_fit_2D(
-            data=data, weights=wgts, axis_1_basis=time_basis,
-            axis_2_basis=freq_basis, method='cg',
-        )
-    assert meta_cg_alias['method'] == 'pcg'
-    np.testing.assert_allclose(sol_cg_alias, sol_cg, atol=1e-7, rtol=1e-6)
+    assert meta_pcg_x0['converged']
+    model_pcg_x0 = time_basis @ sol_pcg_x0 @ freq_basis.T
+    np.testing.assert_allclose(model_pcg_x0, model_lsqr, atol=1e-7, rtol=1e-6)
 
     # An unknown method is rejected
     pytest.raises(
@@ -2190,7 +2180,7 @@ def test_sparse_linear_fit_2d_cg():
     )
 
 
-def test_sparse_linear_fit_2d_cg_falls_back_to_lsqr(monkeypatch):
+def test_sparse_linear_fit_2d_pcg_falls_back_to_lsqr(monkeypatch):
     # When PCG cannot reach pcg_tol the solve is redone with LSQR. Check that the
     # fallback fires, warns, still returns a usable answer, and reports both
     # solvers' diagnostics without leaking those keys into the other paths.
