@@ -21,6 +21,9 @@ DAYENU_DEFAULTS_1D = {'suppression_factors' : [1e-9],
 DPSS_DEFAULTS_1D = {'suppression_factors' :  [1e-9],
                'eigenval_cutoff' : [1e-12],
                'max_contiguous_edge_flags' : 10}
+DPSS_PCG_DEFAULTS_1D = {**DPSS_DEFAULTS_1D,
+                        'tol': 1e-8,
+                        'maxiter': 500}
 DFT_DEFAULTS_1D = {'suppression_factors' : [1e-9],
                 'fundamental_period' : np.nan,
                 'max_contiguous_edge_flags' : 10}
@@ -34,6 +37,9 @@ DAYENU_DEFAULTS_2D = {'suppression_factors' : [[1e-9], [1e-9]],
 DPSS_DEFAULTS_2D = {'suppression_factors' : [[1e-9], [1e-9]],
                'eigenval_cutoff' : [[1e-12], [1e-12]],
                'max_contiguous_edge_flags' : 10}
+DPSS_PCG_DEFAULTS_2D = {**DPSS_DEFAULTS_2D,
+                        'tol': 1e-8,
+                        'maxiter': 500}
 DFT_DEFAULTS_2D = {'suppression_factors' : [[1e-9], [1e-9]],
                 'fundamental_period' : [np.nan, np.nan],
                 'max_contiguous_edge_flags' : 10}
@@ -351,6 +357,11 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                                       speed to leastsq in many cases, but LU decomposition
                                       is cached so it can be faster for data with many similar
                                       flagging patterns.
+                        'dpss_pcg', batched preconditioned conjugate-gradient DPSS fitting.
+                                    This avoids constructing a dense normal matrix for every
+                                    row and is best suited to non-binary weights without large
+                                    zero-weight gaps. It requires finite, non-negative weights
+                                    and caches only the DPSS basis.
                         'dft_solve', dft fitting using linalg.lu_solve
                         'dpss_matrix', dpss fitting using direct lin-lsq matrix
                                        computation. Slower then lsq but provides linear
@@ -390,7 +401,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                         then no regularization is applied. If value is greater , ridge_alpha is used as
                         the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
                         is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes
-                        (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
+                        (dpss_leastsq, dft_leastsq, dpss_solve, dpss_pcg, dft_solve, dpss_matrix, dft_matrix). Reasonable values
                         for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2,
                         but will depend on factors such as the noise level in the data and the flagging mask. Implementation
                         differs slightly from the standard ridge regression in that the regularization parameter is
@@ -462,7 +473,13 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                                 If False, disables caching of the linear solver matrices. This is useful for if
                                 the weights change frequently and the user does not want to cache the
                                 solver matrices. The DPSS and DFT basis functions will still be cached
-                                even if this is set to False. Default value is True.
+                                even if this is set to False. Default value is True. ``dpss_pcg``
+                                never caches solver products, regardless of this setting.
+                            tol : float, optional
+                                Relative preconditioned normal-equation residual tolerance
+                                for ``dpss_pcg``. Default is 1e-8.
+                            maxiter : int, optional
+                                Maximum number of PCG iterations for ``dpss_pcg``. Default is 500.
                         * clean :
                              defaults can be accessed in dspec.CLEAN_DEFAULTS
                              tol : float,
@@ -502,7 +519,10 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                               to this format.
                               * 'status': dict holding two sub-dicts status of filtering on each time/frequency step.
                                         - 'axis_0'/'axis_1': dict holding the status of time filtering for each time/freq step. Keys are integer index
-                                                    of each step and values are a string that is either 'success' or 'skipped'.
+                                                    of each step and values are 'success', 'skipped', or, for
+                                                    ``dpss_pcg``, 'maxiter'.
+                              * 'solver_info': for ``dpss_pcg``, convergence diagnostics for each fitted row,
+                                               organized under 'axis_0' and 'axis_1'.
                               * 'filter_params': dict holding the filtering parameters for each axis with the following sub-dicts.
                                         - 'axis_0'/'axis_1': dict holding filtering parameters for filtering over each respective axis.
                                                     - 'mode': the filtering mode used to filter the time axis ('dayenu', 'dpss_leastsq' 'dpss_method')
@@ -525,7 +545,7 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                            raise ValueError("filter_dims can either contain 0, 1, or -1.")
                    supported_modes=['clean', 'dft_leastsq', 'dpss_leastsq', 'dft_matrix', 'dpss_matrix', 'dayenu',
                                     'dayenu_dft_leastsq', 'dayenu_dpss_leastsq', 'dayenu_dpss_matrix',
-                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dft_solve']
+                                    'dayenu_dft_matrix', 'dayenu_clean', 'dpss_solve', 'dpss_pcg', 'dft_solve']
                    if not mode in supported_modes:
                        raise ValueError("Need to supply a mode in supported modes:%s"%(str(supported_modes)))
                    mode = mode.split('_')
@@ -591,9 +611,9 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                            defaults = DFT_DEFAULTS_1D
                    elif mode[0] == 'dpss':
                        if filter2d:
-                           defaults = DPSS_DEFAULTS_2D
+                           defaults = DPSS_PCG_DEFAULTS_2D if mode[1] == 'pcg' else DPSS_DEFAULTS_2D
                        else:
-                           defaults = DPSS_DEFAULTS_1D
+                           defaults = DPSS_PCG_DEFAULTS_1D if mode[1] == 'pcg' else DPSS_DEFAULTS_1D
                    elif mode[0] == 'clean':
                        if filter2d:
                            defaults = CLEAN_DEFAULTS_2D
@@ -663,12 +683,15 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                            filter_dims_d = [1]
                        suppression_factors = filter_kwargs.pop('suppression_factors')
                        max_contiguous_edge_flags = filter_kwargs.pop('max_contiguous_edge_flags')
+                       pcg_tol = filter_kwargs.pop('tol', 1e-8)
+                       pcg_maxiter = filter_kwargs.pop('maxiter', 500)
                        #if filter2d is True, create fitting_options that is a 2-list for 0 and 1 dimension
                        model, residual, info = _fit_basis_2d(x=x, data=data, filter_centers=filter_centers, filter_dims=filter_dims_d,
                                                            skip_wgt=skip_wgt, basis=mode[0], method=mode[1], wgts=wgts, basis_options=filter_kwargs,
                                                            filter_half_widths=filter_half_widths, suppression_factors=suppression_factors,
                                                            cache=cache, cache_solver_products=cache_solver_products, max_contiguous_edge_flags=max_contiguous_edge_flags,
-                                                           zero_residual_flags=zero_residual_flags, ridge_alpha=ridge_alpha)
+                                                           zero_residual_flags=zero_residual_flags, ridge_alpha=ridge_alpha,
+                                                           pcg_tol=pcg_tol, pcg_maxiter=pcg_maxiter)
                    elif mode[0] == 'clean':
                        if zero_residual_flags is None:
                            zero_residual_flags = False
@@ -1725,8 +1748,6 @@ def _fit_basis_1d(x, y, w, filter_centers, filter_half_widths,
         (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
         for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2,
         but will depend on factors such as the noise level in the data and the flagging mask.
-
-
     Returns:
         model: array-like
             Ndata array of complex floats equal to interpolated model
@@ -2046,11 +2067,235 @@ def _clean_filter(x, data, wgts, filter_centers, filter_half_widths,
 
 
 
+_DPSS_PCG_BATCH_SIZE = 512
+
+
+def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
+                   basis_options, suppression_factors=None, cache=None,
+                   ridge_alpha=0.0, tol=1e-8, maxiter=500):
+    """Fit independent rows to a DPSS basis with batched Jacobi-PCG.
+
+    This solves the same normal equations as ``dpss_solve`` without forming
+    one dense normal matrix per row. Rows converge independently, while the
+    basis applications for up to ``_DPSS_PCG_BATCH_SIZE`` rows are combined
+    into matrix multiplications. An exactly real DPSS basis uses real BLAS;
+    complex data are split into their real and imaginary systems in that case.
+    """
+    if not np.isscalar(tol) or not np.isfinite(tol) or tol <= 0:
+        raise ValueError("tol must be a positive finite scalar for dpss_pcg.")
+    if not isinstance(maxiter, (int, np.integer)) or maxiter < 1:
+        raise ValueError("maxiter must be a positive integer for dpss_pcg.")
+    if np.iscomplexobj(wgts):
+        if np.any(np.imag(wgts) != 0):
+            raise ValueError("dpss_pcg requires real weights.")
+        wgts = np.real(wgts)
+    if np.any(~np.isfinite(wgts)) or np.any(wgts < 0):
+        raise ValueError("dpss_pcg requires finite, non-negative weights.")
+
+    if cache is None:
+        cache = {}
+    amat, nterms = dpss_operator(
+        x,
+        filter_centers=filter_centers,
+        filter_half_widths=filter_half_widths,
+        cache=cache,
+        **basis_options,
+    )
+
+    if suppression_factors is None:
+        suppression_vector = np.ones(amat.shape[1])
+    else:
+        suppression_vector = np.hstack([
+            (1 - sf) * np.ones(nterm)
+            for sf, nterm in zip(suppression_factors, nterms)
+        ])
+
+    info = copy.deepcopy(basis_options)
+    info['method'] = 'pcg'
+    info['basis'] = 'dpss'
+    info['filter_centers'] = filter_centers
+    info['filter_half_widths'] = filter_half_widths
+    info['suppression_factors'] = suppression_factors
+    info['basis_options'] = basis_options
+    info['amat'] = amat
+    info['nterms'] = nterms
+    info['tol'] = tol
+    info['maxiter'] = maxiter
+    info['skipped'] = False
+
+    # Zero-centered DPSS operators are stored as complex arrays despite being
+    # exactly real. Demoting them avoids complex normal-operator products.
+    real_tol = (
+        max(amat.shape)
+        * np.finfo(amat.real.dtype).eps
+        * max(float(np.max(np.abs(amat))), 1.0)
+    )
+    basis_is_real = (
+        not np.iscomplexobj(amat)
+        or np.max(np.abs(np.imag(amat))) <= real_tol
+    )
+    if basis_is_real:
+        solve_basis = np.ascontiguousarray(np.real(amat))
+    else:
+        solve_basis = np.ascontiguousarray(amat)
+
+    basis_conj = np.ascontiguousarray(np.conj(solve_basis))
+    basis_transpose = solve_basis.T
+    basis_power = np.ascontiguousarray(np.abs(solve_basis) ** 2)
+
+    model = np.zeros_like(data)
+    iterations = np.zeros(data.shape[0], dtype=int)
+    converged = np.zeros(data.shape[0], dtype=bool)
+    relative_residual = np.full(data.shape[0], np.inf, dtype=float)
+
+    for start in range(0, data.shape[0], _DPSS_PCG_BATCH_SIZE):
+        stop = min(start + _DPSS_PCG_BATCH_SIZE, data.shape[0])
+        data_batch = np.ascontiguousarray(data[start:stop])
+        weight_batch = np.ascontiguousarray(wgts[start:stop])
+        nrows = stop - start
+
+        split_complex_data = basis_is_real and np.iscomplexobj(data_batch)
+        if split_complex_data:
+            solve_data = np.ascontiguousarray(
+                np.vstack((data_batch.real, data_batch.imag))
+            )
+            solve_weights = np.ascontiguousarray(
+                np.vstack((weight_batch, weight_batch))
+            )
+        else:
+            solve_data = data_batch
+            solve_weights = weight_batch
+
+        rhs = (solve_weights * solve_data) @ basis_conj
+        unregularized_diagonal = solve_weights @ basis_power
+        preconditioner_diagonal = (
+            (1 + ridge_alpha) * unregularized_diagonal
+        )
+        inverse_diagonal = np.divide(
+            1.0,
+            preconditioner_diagonal,
+            out=np.zeros_like(preconditioner_diagonal),
+            where=preconditioner_diagonal > 0,
+        )
+
+        # Jacobi is exact for an unflagged orthonormal DPSS basis and remains
+        # a useful initial approximation for smoothly varying weights.
+        coefficients = rhs * inverse_diagonal
+
+        def apply_normal(vector):
+            result = (
+                (vector @ basis_transpose) * solve_weights
+            ) @ basis_conj
+            if ridge_alpha > 0:
+                result += ridge_alpha * unregularized_diagonal * vector
+            return result
+
+        residual = rhs - apply_normal(coefficients)
+        preconditioned_residual = residual * inverse_diagonal
+        direction = preconditioned_residual.copy()
+        rz = np.sum(
+            np.conj(residual) * preconditioned_residual, axis=1
+        ).real
+        rhs_preconditioned_norm_sq = np.sum(
+            np.conj(rhs) * (rhs * inverse_diagonal), axis=1
+        ).real
+        target_residual_sq = tol ** 2 * rhs_preconditioned_norm_sq
+        active = rz > target_residual_sq
+        failed = np.zeros(solve_data.shape[0], dtype=bool)
+        batch_iterations = np.zeros(solve_data.shape[0], dtype=int)
+
+        for _ in range(maxiter):
+            if not np.any(active):
+                break
+
+            normal_direction = apply_normal(direction)
+            curvature = np.sum(
+                np.conj(direction) * normal_direction, axis=1
+            ).real
+            usable = (
+                active
+                & np.isfinite(curvature)
+                & (curvature > 0)
+                & np.isfinite(rz)
+                & (rz > 0)
+            )
+            failed |= active & ~usable
+            alpha = np.divide(
+                rz,
+                curvature,
+                out=np.zeros_like(rz),
+                where=usable,
+            )
+            coefficients += alpha[:, None] * direction
+            residual -= alpha[:, None] * normal_direction
+            batch_iterations[usable] += 1
+
+            preconditioned_residual = residual * inverse_diagonal
+            new_rz = np.sum(
+                np.conj(residual) * preconditioned_residual, axis=1
+            ).real
+            next_active = (
+                usable
+                & (new_rz > target_residual_sq)
+                & np.isfinite(new_rz)
+                & (new_rz > 0)
+            )
+            beta = np.divide(
+                new_rz,
+                rz,
+                out=np.zeros_like(rz),
+                where=next_active,
+            )
+            direction = (
+                preconditioned_residual + beta[:, None] * direction
+            )
+            direction[~next_active] = 0
+            rz = new_rz
+            active = next_active
+
+        batch_converged = (
+            (rz <= target_residual_sq) & np.isfinite(rz) & ~failed
+        )
+        batch_relative_residual = np.divide(
+            np.sqrt(np.maximum(rz, 0)),
+            np.sqrt(rhs_preconditioned_norm_sq),
+            out=np.zeros_like(rhs_preconditioned_norm_sq),
+            where=rhs_preconditioned_norm_sq > 0,
+        )
+
+        if split_complex_data:
+            complex_coefficients = (
+                coefficients[:nrows] + 1j * coefficients[nrows:]
+            )
+            model[start:stop] = (
+                complex_coefficients * suppression_vector
+            ) @ solve_basis.T
+            iterations[start:stop] = np.maximum(
+                batch_iterations[:nrows], batch_iterations[nrows:]
+            )
+            converged[start:stop] = (
+                batch_converged[:nrows] & batch_converged[nrows:]
+            )
+            relative_residual[start:stop] = np.maximum(
+                batch_relative_residual[:nrows],
+                batch_relative_residual[nrows:],
+            )
+        else:
+            model[start:stop] = (
+                coefficients * suppression_vector
+            ) @ solve_basis.T
+            iterations[start:stop] = batch_iterations
+            converged[start:stop] = batch_converged
+            relative_residual[start:stop] = batch_relative_residual
+
+    return model, iterations, converged, relative_residual, info
+
+
 def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                 basis_options, suppression_factors=None,
                 method='leastsq', basis='dft', cache=None, cache_solver_products=True,
                 filter_dims = 1, skip_wgt=0.1, max_contiguous_edge_flags=5, ridge_alpha=0.0,
-                zero_residual_flags=True):
+                zero_residual_flags=True, pcg_tol=1e-8, pcg_maxiter=500):
     r"""
     A 1d linear-least-squares fitting function for computing models and residuals for fitting of the form
     y_model = A @ c
@@ -2119,6 +2364,8 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                 using scipy.optimize.leastsq
             *'matrix' derive model by directly calculate the fitting matrix
                 [A^T W A]^{-1} A^T W and applying it to the y vector.
+            *'pcg' solve all independent DPSS fits in batches using Jacobi-
+                preconditioned conjugate gradients.
     cache: dictionary, optional
         dictionary to cache basis operators and intermediate results in.
         If None, will create a new cache dictionary.
@@ -2143,9 +2390,14 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
         then no regularization is applied. If value is greater than zero, ridge_alpha is used as
         the regularization parameter in ridge regression (specifically the main diagonal of the XTX product
         is multiplied by a value of (1 + ridge_alpha)). Only used in the following linear modes
-        (dpss_leastsq, dft_leastsq, dpss_solve, dft_solve, dpss_matrix, dft_matrix). Reasonable values
+        (dpss_leastsq, dft_leastsq, dpss_solve, dpss_pcg, dft_solve, dpss_matrix, dft_matrix). Reasonable values
         for ridge_alpha when using the DPSS and DFT modes for inpainting wide gaps are between 1e-5 and 1e-2,
         but will depend on factors such as the noise level in the data and the flagging mask.
+    pcg_tol: float, optional
+        Relative preconditioned normal-equation residual tolerance used when
+        ``method='pcg'``. Default is 1e-8.
+    pcg_maxiter: int, optional
+        Maximum iterations used when ``method='pcg'``. Default is 500.
 
     Returns
     -------
@@ -2157,7 +2409,10 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
           has the following fields
          * 'status': dict holding two sub-dicts status of filtering on each time/frequency step.
                    - 'axis_0'/'axis_1': dict holding the status of time filtering for each time/freq step. Keys are integer index
-                               of each step and values are a string that is either 'success' or 'skipped'.
+                               of each step and values are 'success', 'skipped', or, for
+                               PCG, 'maxiter'.
+         * 'solver_info': for PCG, iteration count, convergence state, and relative
+                          residual for each fitted row under 'axis_0' and 'axis_1'.
          * 'filter_params': dict holding the filtering parameters for each axis with the following sub-dicts.
                    - 'axis_0'/'axis_1': dict holding filtering parameters for filtering over each respective axis.
                                - 'filter_centers': centers of filtering windows.
@@ -2173,6 +2428,10 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
     if cache is None:
         cache={}
     info = {'status':{'axis_0':{}, 'axis_1':{}}}
+    if method == 'pcg':
+        if basis != 'dpss':
+            raise ValueError("The pcg method currently supports only the DPSS basis.")
+        info['solver_info'] = {'axis_0':{}, 'axis_1':{}}
     residual = np.zeros_like(data)
     filter2d = (0 in filter_dims and 1 in filter_dims)
     filter_dims = sorted(filter_dims)[::-1]
@@ -2191,27 +2450,79 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
             if not isinstance(basis_options[k], (tuple,list)) or not len(basis_options[k]) == 2:
                 raise ValueError("basis_options values must be 2-tuple or 2-list for 2d filtering.")
         basis_options = [{k:basis_options[k][0] for k in basis_options}, {k:basis_options[k][1] for k in basis_options}]
+
+    def valid_filter_rows(weights):
+        """Match the row-selection rules used by the direct fitting modes."""
+        return (
+            (np.count_nonzero(weights, axis=1) / weights.shape[1] >= skip_wgt)
+            & (np.count_nonzero(
+                weights[:, :max_contiguous_edge_flags], axis=1
+            ) > 0)
+            & (np.count_nonzero(
+                weights[:, -max_contiguous_edge_flags:], axis=1
+            ) > 0)
+        )
+
     #filter -1 dimension
     model = np.zeros_like(data)
-    for i, _y, _w, in zip(range(data.shape[0]), data, wgts):
-        if np.count_nonzero(_w)/len(_w) >= skip_wgt and np.count_nonzero(_w[:max_contiguous_edge_flags]) > 0 \
-                                                        and np.count_nonzero(_w[-max_contiguous_edge_flags:]) >0:
-            model[i], _, info_t = _fit_basis_1d(x=x[1], y=_y, w=_w, filter_centers=filter_centers[1],
-                                            filter_half_widths=filter_half_widths[1],
-                                            suppression_factors=suppression_factors[1],
-                                            basis_options=basis_options[1], method=method,
-                                            basis=basis, cache=cache, cache_solver_products=cache_solver_products,
-                                            ridge_alpha=ridge_alpha)
-            if info_t['skipped']:
-                info['status']['axis_1'][i] = 'skipped'
-            else:
-                info['status']['axis_1'][i] = 'success'
-        else:
+    if method == 'pcg':
+        valid_rows = valid_filter_rows(wgts)
+        for i in range(data.shape[0]):
             info['status']['axis_1'][i] = 'skipped'
+        if np.any(valid_rows):
+            (pcg_model, iterations, converged, relative_residual,
+             info_t) = _fit_basis_pcg(
+                x=x[1], data=data[valid_rows], wgts=wgts[valid_rows],
+                filter_centers=filter_centers[1],
+                filter_half_widths=filter_half_widths[1],
+                suppression_factors=suppression_factors[1],
+                basis_options=basis_options[1], cache=cache,
+                ridge_alpha=ridge_alpha, tol=pcg_tol,
+                maxiter=pcg_maxiter,
+            )
+            model[valid_rows] = pcg_model
+            for result_index, row_index in enumerate(np.flatnonzero(valid_rows)):
+                info['status']['axis_1'][row_index] = (
+                    'success' if converged[result_index] else 'maxiter'
+                )
+                info['solver_info']['axis_1'][row_index] = {
+                    'iter_num': int(iterations[result_index]),
+                    'converged': bool(converged[result_index]),
+                    'relative_residual': float(
+                        relative_residual[result_index]
+                    ),
+                }
+            if not np.all(converged):
+                warn(
+                    f"dpss_pcg did not converge for "
+                    f"{np.count_nonzero(~converged)} of {converged.size} "
+                    f"rows within {pcg_maxiter} iterations. Returning the "
+                    "last iterates.",
+                    RuntimeWarning,
+                )
+    else:
+        for i, _y, _w, in zip(range(data.shape[0]), data, wgts):
+            if np.count_nonzero(_w)/len(_w) >= skip_wgt and np.count_nonzero(_w[:max_contiguous_edge_flags]) > 0 \
+                                                            and np.count_nonzero(_w[-max_contiguous_edge_flags:]) >0:
+                model[i], _, info_t = _fit_basis_1d(x=x[1], y=_y, w=_w, filter_centers=filter_centers[1],
+                                                filter_half_widths=filter_half_widths[1],
+                                                suppression_factors=suppression_factors[1],
+                                                basis_options=basis_options[1], method=method,
+                                                basis=basis, cache=cache, cache_solver_products=cache_solver_products,
+                                                ridge_alpha=ridge_alpha)
+                if info_t['skipped']:
+                    info['status']['axis_1'][i] = 'skipped'
+                else:
+                    info['status']['axis_1'][i] = 'success'
+            else:
+                info['status']['axis_1'][i] = 'skipped'
     #and if filter2d, filter the 0 dimension. Note that we feed in the 'model'
     #set wgts for time filtering to happen on skipped rows
     info['filter_params'] = {'axis_0':{}, 'axis_1':{}}
-    if np.any([info['status']['axis_1'][i] == 'success' for i in info['status']['axis_1']]):
+    if np.any([
+        info['status']['axis_1'][i] != 'skipped'
+        for i in info['status']['axis_1']
+    ]):
         info['filter_params']['axis_1']['method'] = info_t['method']
         info['filter_params']['axis_1']['basis'] = info_t['basis']
         info['filter_params']['axis_1']['filter_centers'] = info_t['filter_centers']
@@ -2224,27 +2535,70 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
         for i in range(data.shape[0]):
             if info['status']['axis_1'][i] == 'skipped':
                 wgts_time[i] = 0.
-        for i, _y, _w, in zip(range(model.shape[1]), model.T, wgts_time.T):
-            if np.count_nonzero(_w)/len(_w) >= skip_wgt and np.count_nonzero(_w[:max_contiguous_edge_flags]) > 0 \
-               and np.count_nonzero(_w[-max_contiguous_edge_flags:]) >0:
-                model.T[i], _, info_t = _fit_basis_1d(x=x[0], y=_y, w=_w, filter_centers=filter_centers[0],
-                                                                 filter_half_widths=filter_half_widths[0],
-                                                                 suppression_factors=suppression_factors[0],
-                                                                 basis_options=basis_options[0], method=method,
-                                                                 basis=basis, cache=cache, ridge_alpha=ridge_alpha)
-                if info_t['skipped']:
-                    info['status']['axis_0'][i] = 'skipped'
-                else:
-                    info['status']['axis_0'][i] = 'success'
-            else:
+        if method == 'pcg':
+            valid_columns = valid_filter_rows(wgts_time.T)
+            for i in range(model.shape[1]):
                 info['status']['axis_0'][i] = 'skipped'
-        if np.any([info['status']['axis_0'][i] == 'success' for i in info['status']['axis_0']]):
+            if np.any(valid_columns):
+                (pcg_model, iterations, converged, relative_residual,
+                 info_t) = _fit_basis_pcg(
+                    x=x[0], data=model.T[valid_columns],
+                    wgts=wgts_time.T[valid_columns],
+                    filter_centers=filter_centers[0],
+                    filter_half_widths=filter_half_widths[0],
+                    suppression_factors=suppression_factors[0],
+                    basis_options=basis_options[0], cache=cache,
+                    ridge_alpha=ridge_alpha, tol=pcg_tol,
+                    maxiter=pcg_maxiter,
+                )
+                model.T[valid_columns] = pcg_model
+                for result_index, column_index in enumerate(
+                    np.flatnonzero(valid_columns)
+                ):
+                    info['status']['axis_0'][column_index] = (
+                        'success' if converged[result_index] else 'maxiter'
+                    )
+                    info['solver_info']['axis_0'][column_index] = {
+                        'iter_num': int(iterations[result_index]),
+                        'converged': bool(converged[result_index]),
+                        'relative_residual': float(
+                            relative_residual[result_index]
+                        ),
+                    }
+                if not np.all(converged):
+                    warn(
+                        f"dpss_pcg did not converge for "
+                        f"{np.count_nonzero(~converged)} of "
+                        f"{converged.size} columns within {pcg_maxiter} "
+                        "iterations. Returning the last iterates.",
+                        RuntimeWarning,
+                    )
+        else:
+            for i, _y, _w, in zip(range(model.shape[1]), model.T, wgts_time.T):
+                if np.count_nonzero(_w)/len(_w) >= skip_wgt and np.count_nonzero(_w[:max_contiguous_edge_flags]) > 0 \
+                   and np.count_nonzero(_w[-max_contiguous_edge_flags:]) >0:
+                    model.T[i], _, info_t = _fit_basis_1d(x=x[0], y=_y, w=_w, filter_centers=filter_centers[0],
+                                                                     filter_half_widths=filter_half_widths[0],
+                                                                     suppression_factors=suppression_factors[0],
+                                                                     basis_options=basis_options[0], method=method,
+                                                                     basis=basis, cache=cache, ridge_alpha=ridge_alpha)
+                    if info_t['skipped']:
+                        info['status']['axis_0'][i] = 'skipped'
+                    else:
+                        info['status']['axis_0'][i] = 'success'
+                else:
+                    info['status']['axis_0'][i] = 'skipped'
+        if np.any([
+            info['status']['axis_0'][i] != 'skipped'
+            for i in info['status']['axis_0']
+        ]):
             info['filter_params']['axis_0']['method'] = info_t['method']
             info['filter_params']['axis_0']['basis'] = info_t['basis']
             info['filter_params']['axis_0']['filter_centers'] = info_t['filter_centers']
             info['filter_params']['axis_0']['filter_half_widths'] = info_t['filter_half_widths']
             info['filter_params']['axis_0']['suppression_factors'] = info_t['suppression_factors']
             info['filter_params']['axis_0']['basis_options'] = info_t['basis_options']
+            info['filter_params']['axis_0']['mode'] = info_t['basis'] + '_' + method
 
     residual = (data - model) * (np.abs(wgts) > 0).astype(float)
     #this will only happen if filter_dims is only zero!

@@ -1122,6 +1122,169 @@ def test_fourier_filter():
     assert np.isclose(info_dft['filter_params']['axis_0']['basis_options']['fundamental_period'],
                       dft_options2_2d['fundamental_period'][0])
 
+
+@pytest.mark.parametrize("filter_dim", [0, 1])
+@pytest.mark.parametrize("filter_center", [0.0, 0.03])
+def test_dpss_pcg_matches_solve(filter_dim, filter_center):
+    """Batched PCG should solve the same weighted system as dense LU."""
+    rng = np.random.default_rng(42)
+    data = (
+        rng.normal(size=(24, 64))
+        + 1j * rng.normal(size=(24, 64))
+    )
+    wgts = rng.uniform(0.2, 1.4, size=data.shape)
+    x = np.arange(data.shape[filter_dim], dtype=float)
+    options = {
+        'filter_centers': [filter_center],
+        'filter_half_widths': [0.08],
+        'suppression_factors': [1e-9],
+        'eigenval_cutoff': [1e-8],
+        'max_contiguous_edge_flags': len(x),
+        'filter_dims': filter_dim,
+        'ridge_alpha': 1e-3,
+    }
+
+    solve_model, solve_residual, _ = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_solve',
+        cache_solver_products=False, **options,
+    )
+    pcg_model, pcg_residual, pcg_info = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_pcg', tol=1e-11,
+        maxiter=500, **options,
+    )
+
+    np.testing.assert_allclose(pcg_model, solve_model, rtol=1e-8, atol=1e-9)
+    np.testing.assert_allclose(
+        pcg_residual, solve_residual, rtol=1e-8, atol=1e-9
+    )
+    axis = f'axis_{filter_dim}'
+    assert set(pcg_info['status'][axis].values()) == {'success'}
+    assert pcg_info['filter_params'][axis]['mode'] == 'dpss_pcg'
+    assert all(
+        item['converged']
+        and item['iter_num'] <= 500
+        and item['relative_residual'] <= 1e-11
+        for item in pcg_info['solver_info'][axis].values()
+    )
+
+
+def test_dpss_pcg_skips_rows_and_reports_maxiter():
+    rng = np.random.default_rng(43)
+    x = np.arange(80, dtype=float)
+    data = rng.normal(size=(8, x.size)) + 1j * rng.normal(size=(8, x.size))
+    wgts = rng.uniform(0.05, 2.0, size=data.shape)
+    wgts[0] = 0
+    wgts[1, :5] = 0
+    options = {
+        'filter_centers': [0.0],
+        'filter_half_widths': [0.18],
+        'suppression_factors': [0.0],
+        'eigenval_cutoff': [1e-10],
+        'max_contiguous_edge_flags': 5,
+    }
+
+    with pytest.warns(RuntimeWarning, match='did not converge'):
+        model, residual, info = dspec.fourier_filter(
+            x, data, wgts, mode='dpss_pcg', tol=1e-14,
+            maxiter=1, **options,
+        )
+
+    assert info['status']['axis_1'][0] == 'skipped'
+    assert info['status']['axis_1'][1] == 'skipped'
+    assert any(
+        status == 'maxiter'
+        for status in info['status']['axis_1'].values()
+    )
+    assert np.all(model[:2] == 0)
+    assert np.all(residual[0] == 0)
+    assert np.all(residual[1, wgts[1] == 0] == 0)
+
+
+def test_dpss_pcg_two_axis_filter_matches_solve():
+    rng = np.random.default_rng(44)
+    data = rng.normal(size=(20, 30)) + 1j * rng.normal(size=(20, 30))
+    wgts = rng.uniform(0.3, 1.2, size=data.shape)
+    x = [np.arange(data.shape[0], dtype=float),
+         np.arange(data.shape[1], dtype=float)]
+    options = {
+        'filter_centers': [[0.0], [0.0]],
+        'filter_half_widths': [[0.06], [0.08]],
+        'suppression_factors': [[1e-9], [1e-9]],
+        'eigenval_cutoff': [[1e-8], [1e-8]],
+        'max_contiguous_edge_flags': min(data.shape),
+        'filter_dims': [1, 0],
+    }
+    solve_model, _, _ = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_solve',
+        cache_solver_products=False, **options,
+    )
+    pcg_model, _, info = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_pcg', tol=1e-11, **options,
+    )
+
+    np.testing.assert_allclose(pcg_model, solve_model, rtol=1e-8, atol=1e-9)
+    assert info['filter_params']['axis_0']['mode'] == 'dpss_pcg'
+    assert info['filter_params']['axis_1']['mode'] == 'dpss_pcg'
+
+
+def test_dpss_pcg_supports_1d_input_and_caches_only_basis():
+    rng = np.random.default_rng(45)
+    x = np.arange(64, dtype=float)
+    data = rng.normal(size=x.size) + 1j * rng.normal(size=x.size)
+    wgts = rng.uniform(0.2, 1.2, size=x.size)
+    cache = {}
+    options = {
+        'filter_centers': [0.0],
+        'filter_half_widths': [0.1],
+        'suppression_factors': [1e-9],
+        'eigenval_cutoff': [1e-8],
+        'max_contiguous_edge_flags': len(x),
+    }
+
+    solve_model, _, _ = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_solve',
+        cache_solver_products=False, **options,
+    )
+    pcg_model, _, info = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_pcg', cache=cache,
+        tol=1e-11, **options,
+    )
+
+    np.testing.assert_allclose(pcg_model, solve_model, rtol=1e-8, atol=1e-9)
+    assert pcg_model.ndim == 1
+    assert len(cache) == 1
+    assert info['status']['axis_1'] == {0: 'success'}
+
+
+@pytest.mark.parametrize(
+    "extra_kwargs, match",
+    [
+        ({'tol': 0}, 'tol must be'),
+        ({'maxiter': 0}, 'maxiter must be'),
+    ],
+)
+def test_dpss_pcg_validates_solver_options(extra_kwargs, match):
+    x = np.arange(32, dtype=float)
+    data = np.ones((2, x.size), dtype=complex)
+    wgts = np.ones_like(data.real)
+    with pytest.raises(ValueError, match=match):
+        dspec.fourier_filter(
+            x, data, wgts, [0.0], [0.1], mode='dpss_pcg',
+            max_contiguous_edge_flags=len(x), **extra_kwargs,
+        )
+
+
+def test_dpss_pcg_rejects_negative_weights():
+    x = np.arange(32, dtype=float)
+    data = np.ones((2, x.size), dtype=complex)
+    wgts = np.ones_like(data.real)
+    wgts[0, 10] = -1
+    with pytest.raises(ValueError, match='non-negative weights'):
+        dspec.fourier_filter(
+            x, data, wgts, [0.0], [0.1], mode='dpss_pcg',
+            max_contiguous_edge_flags=len(x),
+        )
+
 def test_regularized_regression():
     nfreqs = 500
     freqs = np.linspace(50e6, 250e6, nfreqs)
