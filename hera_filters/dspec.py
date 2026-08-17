@@ -4,6 +4,7 @@
 
 import copy
 import hashlib
+from numbers import Real
 from warnings import warn
 
 import numpy as np
@@ -3614,6 +3615,9 @@ def sparse_linear_fit_2D(
         retain more weakly constrained modes and may reduce stability.
     **kwargs : dict
         Additional keyword arguments passed to the selected scipy sparse solver.
+        For PCG, ``pcg_tol`` sets the relative normal-equation residual
+        tolerance and defaults to ``max(atol, btol, 1e-8)``. It is rejected
+        for the LSQR and LSMR methods.
 
     Returns:
     --------
@@ -3665,7 +3669,15 @@ def sparse_linear_fit_2D(
             DeprecationWarning,
             stacklevel=2,
         )
-    pcg_tol = kwargs.pop('pcg_tol', max(atol, btol, 1e-8))
+    if method == 'pcg':
+        pcg_tol = kwargs.pop('pcg_tol', max(atol, btol, 1e-8))
+        if not isinstance(pcg_tol, Real) or not np.isfinite(pcg_tol) \
+                or pcg_tol <= 0:
+            raise ValueError("`pcg_tol` must be a positive finite scalar.")
+    elif 'pcg_tol' in kwargs:
+        raise ValueError("`pcg_tol` is only valid when `method='pcg'`.")
+    else:
+        pcg_tol = None
 
     # Whitening is close to ideal when the approximate per-axis Gramians are
     # well conditioned. A gap is not itself disqualifying: a narrow DPSS basis
@@ -3696,7 +3708,9 @@ def sparse_linear_fit_2D(
     if method == 'pcg' and not whitening_is_safe:
         warn(
             "PCG is unsafe because the weighted basis has near-null modes; "
-            "falling back to LSQR."
+            "falling back to LSQR.",
+            RuntimeWarning,
+            stacklevel=2,
         )
         method = 'lsqr'
         meta_pcg = {'method': 'pcg', 'iter_num': 0, 'resid': np.nan,
@@ -3742,8 +3756,11 @@ def sparse_linear_fit_2D(
         # which is stable in that regime and preserves the historical behavior.
         warn(
             f"PCG did not converge (relative residual {resid:.3e} "
-            f"after {n_iter} iterations); falling back to LSQR. This usually means "
-            f"the fit is underdetermined."
+            f"after {n_iter} iterations); falling back to LSQR. The fit may "
+            "be underdetermined or ill-conditioned, or the requested tolerance "
+            "and iteration limit may be too strict.",
+            RuntimeWarning,
+            stacklevel=2,
         )
         method = 'lsqr'
         meta_pcg = meta

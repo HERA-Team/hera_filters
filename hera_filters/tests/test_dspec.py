@@ -2180,6 +2180,26 @@ def test_sparse_linear_fit_2d_pcg():
     )
 
 
+@pytest.mark.parametrize('method', ['lsqr', 'lsmr'])
+def test_sparse_linear_fit_2d_rejects_pcg_tol_for_other_methods(method):
+    data = np.ones((4, 3))
+    with pytest.raises(ValueError, match="only valid when `method='pcg'`"):
+        dspec.sparse_linear_fit_2D(
+            data, np.ones_like(data), np.ones((4, 1)), np.ones((3, 1)),
+            method=method, pcg_tol=1e-8,
+        )
+
+
+@pytest.mark.parametrize('pcg_tol', [0, -1e-8, np.inf, np.nan])
+def test_sparse_linear_fit_2d_validates_pcg_tol(pcg_tol):
+    data = np.ones((4, 3))
+    with pytest.raises(ValueError, match="positive finite scalar"):
+        dspec.sparse_linear_fit_2D(
+            data, np.ones_like(data), np.ones((4, 1)), np.ones((3, 1)),
+            method='pcg', pcg_tol=pcg_tol,
+        )
+
+
 def test_sparse_linear_fit_2d_pcg_falls_back_to_lsqr(monkeypatch):
     # When PCG cannot reach pcg_tol the solve is redone with LSQR. Check that the
     # fallback fires, warns, still returns a usable answer, and reports both
@@ -2200,11 +2220,14 @@ def test_sparse_linear_fit_2d_pcg_falls_back_to_lsqr(monkeypatch):
     wgts = np.zeros((ntimes, nfreqs))
     wgts[30:90, 20:55] = 1.0
 
-    with pytest.warns(UserWarning, match="falling back to LSQR"):
+    with pytest.warns(
+        RuntimeWarning, match="falling back to LSQR"
+    ) as rank_warnings:
         sol, meta = dspec.sparse_linear_fit_2D(
             data=data, weights=wgts, axis_1_basis=time_basis,
             axis_2_basis=freq_basis, method='pcg', pcg_tol=1e-14, iter_lim=40,
         )
+    assert rank_warnings[0].filename == __file__
     assert meta['fellback']
     assert not meta['converged']
     assert 'pcg_iter_num' in meta and 'pcg_resid' in meta
@@ -2237,11 +2260,14 @@ def test_sparse_linear_fit_2d_pcg_falls_back_to_lsqr(monkeypatch):
 
     with monkeypatch.context() as patch:
         patch.setattr(dspec, '_pcg_normal_equations', stalled_pcg)
-        with pytest.warns(UserWarning, match="PCG did not converge"):
+        with pytest.warns(
+            RuntimeWarning, match="PCG did not converge"
+        ) as convergence_warnings:
             sol_stalled, meta_stalled = dspec.sparse_linear_fit_2D(
                 data=data, weights=wgts_ok, axis_1_basis=time_basis,
                 axis_2_basis=freq_basis, method='pcg',
             )
+    assert convergence_warnings[0].filename == __file__
     assert np.all(np.isfinite(sol_stalled))
     assert meta_stalled['fellback']
     assert meta_stalled['pcg_iter_num'] == 3
