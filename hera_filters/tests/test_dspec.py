@@ -2021,14 +2021,54 @@ def test_sparse_linear_fit_2d_automatic_whitening_and_lsmr():
     )
 
     with pytest.warns(DeprecationWarning) as legacy_warnings:
-        legacy_sol, _ = dspec.sparse_linear_fit_2D(
+        legacy_sol, legacy_meta = dspec.sparse_linear_fit_2D(
             data, weights, time_basis, freq_basis,
             eigenspec_threshold=1e-3,
             precondition_method="legacy",
             precondition_rcond=1e-8,
         )
-    assert len(legacy_warnings) == 3
+    assert len(legacy_warnings) == 2
+    assert legacy_meta['precondition_rcond'] == 1e-8
     np.testing.assert_allclose(legacy_sol, sol_white, atol=1e-8, rtol=1e-8)
+
+
+def test_sparse_linear_fit_2d_precondition_rcond_is_configurable():
+    rng = np.random.default_rng(12)
+    axis_1_basis = np.linalg.qr(rng.standard_normal((12, 2)))[0]
+    axis_1_basis[:, 1] *= 1e-4
+    axis_2_basis = np.linalg.qr(rng.standard_normal((10, 3)))[0]
+    coefficients = rng.standard_normal((2, 3))
+    data = axis_1_basis @ coefficients @ axis_2_basis.T
+    weights = np.ones(data.shape)
+
+    solution_default, meta_default = dspec.sparse_linear_fit_2D(
+        data, weights, axis_1_basis, axis_2_basis,
+    )
+    solution_permissive, meta_permissive = dspec.sparse_linear_fit_2D(
+        data, weights, axis_1_basis, axis_2_basis,
+        precondition_rcond=1e-10,
+    )
+
+    assert not meta_default['preconditioned']
+    assert meta_default['precondition_rcond'] == 1e-6
+    assert meta_permissive['preconditioned']
+    assert meta_permissive['precondition_rcond'] == 1e-10
+    np.testing.assert_allclose(
+        axis_1_basis @ solution_default @ axis_2_basis.T,
+        axis_1_basis @ solution_permissive @ axis_2_basis.T,
+        atol=1e-9,
+        rtol=1e-9,
+    )
+
+
+@pytest.mark.parametrize('precondition_rcond', [-1e-6, 1.0, np.inf, np.nan])
+def test_sparse_linear_fit_2d_validates_precondition_rcond(precondition_rcond):
+    data = np.ones((4, 3))
+    with pytest.raises(ValueError, match='precondition_rcond'):
+        dspec.sparse_linear_fit_2D(
+            data, np.ones_like(data), np.ones((4, 1)), np.ones((3, 1)),
+            precondition_rcond=precondition_rcond,
+        )
 
 
 def test_pcg_helper_breakdown_guards():

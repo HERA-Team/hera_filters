@@ -3538,6 +3538,7 @@ def sparse_linear_fit_2D(
     btol: float = 1e-10,
     iter_lim: int = None,
     method: str = 'lsqr',
+    precondition_rcond: float = 1e-6,
     **kwargs
 ) -> np.ndarray:
     """
@@ -3587,6 +3588,12 @@ def sparse_linear_fit_2D(
             PCG can converge to an unstable solution when the measured data do
             not constrain the model inside a gap. If PCG stalls, this function
             warns and automatically retries with LSQR.
+    precondition_rcond : float, optional, default 1e-6
+        Relative eigenvalue cutoff used to identify near-null modes in the
+        approximate per-axis Gramians. Whitening is disabled for LSQR/LSMR
+        when either Gramian has a mode at or below this cutoff; the same cutoff
+        truncates unsupported modes in the PCG preconditioner. Smaller values
+        retain more weakly constrained modes and may reduce stability.
     **kwargs : dict
         Additional keyword arguments passed to the selected scipy sparse solver.
 
@@ -3624,6 +3631,10 @@ def sparse_linear_fit_2D(
         raise ValueError(
             f"`method` must be 'lsqr', 'lsmr', or 'pcg', got {method!r}."
         )
+    if not np.isscalar(precondition_rcond) \
+            or not np.isfinite(precondition_rcond) \
+            or not 0 <= precondition_rcond < 1:
+        raise ValueError("`precondition_rcond` must be finite and in [0, 1).")
 
     normal_weights = np.asarray(weights)
     if np.iscomplexobj(normal_weights) or not np.all(np.isfinite(normal_weights)) \
@@ -3636,7 +3647,7 @@ def sparse_linear_fit_2D(
     # safety rule below still wins when the problem has a missing axis.
     old_precondition_solver = kwargs.pop('precondition_solver', None)
     for old_option in (
-        'eigenspec_threshold', 'precondition_method', 'precondition_rcond'
+        'eigenspec_threshold', 'precondition_method'
     ):
         if old_option in kwargs:
             kwargs.pop(old_option)
@@ -3655,7 +3666,6 @@ def sparse_linear_fit_2D(
     # can remain fully constrained across it. A wide basis develops near-null
     # gap modes, in which case right preconditioning would change LSQR/LSMR's
     # implicit regularization and is therefore disabled.
-    precondition_rcond = 1e-6
     axis_1_wgts, axis_2_wgts = _leading_separable_weights(normal_weights)
     axis_1_pcond, axis_1_full_rank = _inverse_sqrt_gramian(
         axis_1_basis, axis_1_wgts, precondition_rcond, return_full_rank=True
@@ -3715,7 +3725,8 @@ def sparse_linear_fit_2D(
         )
         meta = {'method': 'pcg', 'iter_num': n_iter, 'converged': bool(converged),
                 'resid': float(resid), 'fellback': False,
-                'preconditioned': True}
+                'preconditioned': True,
+                'precondition_rcond': float(precondition_rcond)}
         if converged:
             return x, meta
 
@@ -3761,7 +3772,8 @@ def sparse_linear_fit_2D(
             axis_1_basis.dtype, axis_2_basis.dtype
         ),
     )
-    meta = {'method': method, 'preconditioned': bool(use_preconditioner)}
+    meta = {'method': method, 'preconditioned': bool(use_preconditioner),
+            'precondition_rcond': float(precondition_rcond)}
     if method == 'lsmr':
         x, meta['istop'], meta['iter_num'], *_ = sparse.linalg.lsmr(
             A=linear_operator,
