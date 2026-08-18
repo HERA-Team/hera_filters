@@ -1122,6 +1122,171 @@ def test_fourier_filter():
     assert np.isclose(info_dft['filter_params']['axis_0']['basis_options']['fundamental_period'],
                       dft_options2_2d['fundamental_period'][0])
 
+
+@pytest.mark.parametrize("filter_dim", [0, 1])
+@pytest.mark.parametrize("filter_center", [0.0, 0.03])
+def test_dpss_pcg_matches_solve(filter_dim, filter_center):
+    """Batched PCG should solve the same weighted system as dense LU."""
+    rng = np.random.default_rng(42)
+    data = (
+        rng.normal(size=(24, 64))
+        + 1j * rng.normal(size=(24, 64))
+    )
+    wgts = rng.uniform(0.2, 1.4, size=data.shape)
+    x = np.arange(data.shape[filter_dim], dtype=float)
+    options = {
+        'filter_centers': [filter_center],
+        'filter_half_widths': [0.08],
+        'suppression_factors': [1e-9],
+        'eigenval_cutoff': [1e-8],
+        'max_contiguous_edge_flags': len(x),
+        'filter_dims': filter_dim,
+        'ridge_alpha': 1e-3,
+    }
+
+    solve_model, solve_residual, _ = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_solve',
+        cache_solver_products=False, **options,
+    )
+    pcg_model, pcg_residual, pcg_info = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_pcg', tol=1e-11,
+        maxiter=500, batch_size=5, **options,
+    )
+
+    np.testing.assert_allclose(pcg_model, solve_model, rtol=1e-8, atol=1e-9)
+    np.testing.assert_allclose(
+        pcg_residual, solve_residual, rtol=1e-8, atol=1e-9
+    )
+    axis = f'axis_{filter_dim}'
+    assert set(pcg_info['status'][axis].values()) == {'success'}
+    assert pcg_info['filter_params'][axis]['mode'] == 'dpss_pcg'
+    assert pcg_info['filter_params'][axis]['batch_size'] == 5
+    assert all(
+        item['converged']
+        and item['iter_num'] <= 500
+        and item['relative_residual'] <= 1e-11
+        for item in pcg_info['solver_info'][axis].values()
+    )
+
+
+def test_dpss_pcg_skips_rows_and_reports_maxiter():
+    rng = np.random.default_rng(43)
+    x = np.arange(80, dtype=float)
+    data = rng.normal(size=(8, x.size)) + 1j * rng.normal(size=(8, x.size))
+    wgts = rng.uniform(0.05, 2.0, size=data.shape)
+    wgts[0] = 0
+    wgts[1, :5] = 0
+    options = {
+        'filter_centers': [0.0],
+        'filter_half_widths': [0.18],
+        'suppression_factors': [0.0],
+        'eigenval_cutoff': [1e-10],
+        'max_contiguous_edge_flags': 5,
+    }
+
+    with pytest.warns(RuntimeWarning, match='did not converge'):
+        model, residual, info = dspec.fourier_filter(
+            x, data, wgts, mode='dpss_pcg', tol=1e-14,
+            maxiter=1, **options,
+        )
+
+    assert info['status']['axis_1'][0] == 'skipped'
+    assert info['status']['axis_1'][1] == 'skipped'
+    assert any(
+        status == 'maxiter'
+        for status in info['status']['axis_1'].values()
+    )
+    assert np.all(model[:2] == 0)
+    assert np.all(residual[0] == 0)
+    assert np.all(residual[1, wgts[1] == 0] == 0)
+
+
+def test_dpss_pcg_two_axis_filter_matches_solve():
+    rng = np.random.default_rng(44)
+    data = rng.normal(size=(20, 30)) + 1j * rng.normal(size=(20, 30))
+    wgts = rng.uniform(0.3, 1.2, size=data.shape)
+    x = [np.arange(data.shape[0], dtype=float),
+         np.arange(data.shape[1], dtype=float)]
+    options = {
+        'filter_centers': [[0.0], [0.0]],
+        'filter_half_widths': [[0.06], [0.08]],
+        'suppression_factors': [[1e-9], [1e-9]],
+        'eigenval_cutoff': [[1e-8], [1e-8]],
+        'max_contiguous_edge_flags': min(data.shape),
+        'filter_dims': [1, 0],
+    }
+    solve_model, _, _ = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_solve',
+        cache_solver_products=False, **options,
+    )
+    pcg_model, _, info = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_pcg', tol=1e-11, **options,
+    )
+
+    np.testing.assert_allclose(pcg_model, solve_model, rtol=1e-8, atol=1e-9)
+    assert info['filter_params']['axis_0']['mode'] == 'dpss_pcg'
+    assert info['filter_params']['axis_1']['mode'] == 'dpss_pcg'
+
+
+def test_dpss_pcg_supports_1d_input_and_caches_only_basis():
+    rng = np.random.default_rng(45)
+    x = np.arange(64, dtype=float)
+    data = rng.normal(size=x.size) + 1j * rng.normal(size=x.size)
+    wgts = rng.uniform(0.2, 1.2, size=x.size)
+    cache = {}
+    options = {
+        'filter_centers': [0.0],
+        'filter_half_widths': [0.1],
+        'suppression_factors': [1e-9],
+        'eigenval_cutoff': [1e-8],
+        'max_contiguous_edge_flags': len(x),
+    }
+
+    solve_model, _, _ = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_solve',
+        cache_solver_products=False, **options,
+    )
+    pcg_model, _, info = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_pcg', cache=cache,
+        tol=1e-11, **options,
+    )
+
+    np.testing.assert_allclose(pcg_model, solve_model, rtol=1e-8, atol=1e-9)
+    assert pcg_model.ndim == 1
+    assert len(cache) == 1
+    assert info['status']['axis_1'] == {0: 'success'}
+
+
+@pytest.mark.parametrize(
+    "extra_kwargs, match",
+    [
+        ({'tol': 0}, 'tol must be'),
+        ({'maxiter': 0}, 'maxiter must be'),
+        ({'batch_size': 0}, 'batch_size must be'),
+    ],
+)
+def test_dpss_pcg_validates_solver_options(extra_kwargs, match):
+    x = np.arange(32, dtype=float)
+    data = np.ones((2, x.size), dtype=complex)
+    wgts = np.ones_like(data.real)
+    with pytest.raises(ValueError, match=match):
+        dspec.fourier_filter(
+            x, data, wgts, [0.0], [0.1], mode='dpss_pcg',
+            max_contiguous_edge_flags=len(x), **extra_kwargs,
+        )
+
+
+def test_dpss_pcg_rejects_negative_weights():
+    x = np.arange(32, dtype=float)
+    data = np.ones((2, x.size), dtype=complex)
+    wgts = np.ones_like(data.real)
+    wgts[0, 10] = -1
+    with pytest.raises(ValueError, match='non-negative weights'):
+        dspec.fourier_filter(
+            x, data, wgts, [0.0], [0.1], mode='dpss_pcg',
+            max_contiguous_edge_flags=len(x),
+        )
+
 def test_regularized_regression():
     nfreqs = 500
     freqs = np.linspace(50e6, 250e6, nfreqs)
@@ -1606,8 +1771,9 @@ def test_sparse_linear_fit_2d():
         x0=np.ravel(sol)
     )
 
-    # Check that convergence was reached more quickly with a good starting point
-    assert meta_w_starting['iter_num'] < meta['iter_num']
+    # Automatic whitening already solves this exactly separable problem in one
+    # iteration, so a good starting point cannot require any more work.
+    assert meta_w_starting['iter_num'] <= meta['iter_num']
 
 
     # Check that the fit closely matches to the separable fit
@@ -1657,7 +1823,8 @@ def test_sparse_linear_fit_2d_non_binary_wgts():
     flags = (time_flags | freq_flags)
 
     # Generate separable, non-binary weights
-    axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,))
+    axis_1_weights = (~time_flags[:, 0]).astype(float) \
+        * rng.integers(1, 10, size=ntimes)
     axis_2_weights = (~freq_flags[0]).astype(float)
     wgts = np.outer(axis_1_weights, axis_2_weights)
 
@@ -1680,7 +1847,26 @@ def test_sparse_linear_fit_2d_non_binary_wgts():
     # Check that the fit closely matches to the separable fit
     np.testing.assert_allclose(sol, sol_sparse, atol=1e-9, rtol=1e-6)
 
-def test_precondition_sparse_solver():
+    # For nonseparable weights and data outside the model subspace, verify that
+    # `weights` appears once in the objective, rather than being squared.
+    m, n, i, j = 12, 10, 3, 4
+    axis_1_basis = rng.standard_normal((m, i))
+    axis_2_basis = rng.standard_normal((n, j))
+    data = rng.standard_normal((m, n)) + 1j * rng.standard_normal((m, n))
+    wgts = 0.2 + rng.random((m, n))
+    design = np.kron(axis_1_basis, axis_2_basis)
+    sqrt_wgts = np.sqrt(wgts).ravel()
+    dense_sol = np.linalg.lstsq(
+        design * sqrt_wgts[:, None],
+        data.ravel() * sqrt_wgts,
+        rcond=None,
+    )[0].reshape(i, j)
+    sparse_sol, _ = dspec.sparse_linear_fit_2D(
+        data, wgts, axis_1_basis, axis_2_basis, atol=1e-12, btol=1e-12,
+    )
+    np.testing.assert_allclose(sparse_sol, dense_sol, atol=1e-10, rtol=1e-10)
+
+def test_automatic_whitening_sparse_solver():
     # test that separable linear fit works as expected.
     ntimes, nfreqs = 100, 50
 
@@ -1698,8 +1884,8 @@ def test_precondition_sparse_solver():
     freqs = np.linspace(100e6, 200e6, nfreqs)
 
     # Generate separable, non-binary weights
-    axis_1_weights = (~time_flags[:, 0]).astype(float) * rng.integers(1, 10, size=(ntimes,))
-    axis_2_weights = (~freq_flags[0]).astype(float)
+    axis_1_weights = rng.integers(1, 10, size=ntimes)
+    axis_2_weights = np.ones(nfreqs)
     wgts = np.outer(axis_1_weights, axis_2_weights)
 
     # Add frequency dependence to the weights to make the problem more ill-conditioned
@@ -1727,10 +1913,452 @@ def test_precondition_sparse_solver():
         weights=wgts,
         axis_1_basis=time_basis,
         axis_2_basis=freq_basis,
-        precondition_solver=True
     )
 
     # Check that the fit closely matches to the separable fit
     np.testing.assert_allclose(sol, sol_sparse, atol=1e-8, rtol=1e-6)
     np.testing.assert_allclose(sol, sol_sparse_precond, atol=1e-8, rtol=1e-6)
+    assert meta_precond['preconditioned']
     np.testing.assert_array_less(meta_precond['iter_num'], meta['iter_num'])
+
+
+def test_kron_matvec_contraction_order():
+    # Both contraction orders in _kron_matvec / _kron_rmatvec must agree, for
+    # every combination of real/complex bases and data, and must preserve dtype.
+    rng = np.random.default_rng(3)
+
+    for cplx_basis in [False, True]:
+        for cplx_data in [False, True]:
+            def make(*shape, cplx):
+                out = rng.standard_normal(shape)
+                if cplx:
+                    out = out + 1j * rng.standard_normal(shape)
+                return out
+
+            # Shapes chosen so that the two axes prefer opposite contraction orders
+            for (m, n, i, j) in [(40, 15, 3, 12), (15, 40, 12, 3), (30, 30, 29, 2)]:
+                axis_1_basis = make(m, i, cplx=cplx_basis)
+                axis_2_basis = make(n, j, cplx=cplx_basis)
+                weights = rng.random((m, n))
+                weights[rng.random((m, n)) < 0.2] = 0
+
+                x = make(i * j, cplx=cplx_data)
+                u = make(m * n, cplx=cplx_data)
+
+                # Reference: contract in the order the shapes do not favour
+                X = x.reshape(i, j)
+                ref_mv = (((axis_1_basis @ X) @ axis_2_basis.T) * weights).ravel()
+                U = u.reshape(m, n) * weights
+                ref_rmv = ((axis_1_basis.T.conj() @ U) @ axis_2_basis.conj()).ravel()
+
+                res_mv = dspec._kron_matvec(x, weights, axis_1_basis, axis_2_basis)
+                res_rmv = dspec._kron_rmatvec(u, weights, axis_1_basis, axis_2_basis)
+
+                np.testing.assert_allclose(res_mv, ref_mv, atol=1e-12, rtol=1e-10)
+                np.testing.assert_allclose(res_rmv, ref_rmv, atol=1e-12, rtol=1e-10)
+                assert res_mv.dtype == ref_mv.dtype
+                assert res_rmv.dtype == ref_rmv.dtype
+
+    # The real-BLAS shortcut must follow numpy's mixed-precision promotion
+    # rules. In particular, float64 @ complex64 produces complex128.
+    real_basis = rng.standard_normal((12, 5)).astype(np.float64)
+    complex_coeffs = (
+        rng.standard_normal((5, 7)) + 1j * rng.standard_normal((5, 7))
+    ).astype(np.complex64)
+    result = dspec._real_matmul(real_basis, complex_coeffs)
+    reference = real_basis @ complex_coeffs
+    assert result.dtype == reference.dtype == np.dtype(np.complex128)
+    np.testing.assert_allclose(result, reference, atol=1e-12, rtol=1e-12)
+
+def test_sparse_linear_fit_2d_automatic_whitening_and_lsmr():
+    # For separable, nonzero weights the whitening preconditioner makes the
+    # normal operator the identity. Use generic complex bases here so this also
+    # checks the coefficient map's ordinary (rather than Hermitian) transpose.
+    rng = np.random.default_rng(11)
+    ntimes, nfreqs, ntime_modes, nfreq_modes = 50, 40, 8, 10
+    time_basis = rng.standard_normal((ntimes, ntime_modes)) \
+        + 1j * rng.standard_normal((ntimes, ntime_modes))
+    freq_basis = rng.standard_normal((nfreqs, nfreq_modes)) \
+        + 1j * rng.standard_normal((nfreqs, nfreq_modes))
+    x_true = rng.standard_normal((ntime_modes, nfreq_modes)) \
+        + 1j * rng.standard_normal((ntime_modes, nfreq_modes))
+    data = time_basis @ x_true @ freq_basis.T
+    weights = np.outer(
+        0.5 + rng.random(ntimes), 0.5 + rng.random(nfreqs)
+    )
+
+    sol_plain, meta_plain = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-10, btol=1e-10,
+        precondition_solver=False,
+    )
+    sol_white, meta_white = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-10, btol=1e-10,
+    )
+    sol_lsmr, meta_lsmr = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-10, btol=1e-10,
+        method='lsmr',
+    )
+
+    assert meta_white['iter_num'] <= 2
+    assert meta_lsmr['iter_num'] <= 2
+    np.testing.assert_array_less(meta_white['iter_num'], meta_plain['iter_num'])
+    np.testing.assert_allclose(sol_white, sol_plain, atol=1e-8, rtol=1e-8)
+    np.testing.assert_allclose(sol_lsmr, sol_plain, atol=1e-8, rtol=1e-8)
+
+    # x0 is part of the public API in the original coefficient coordinates,
+    # even though scipy sees coordinates after right preconditioning.
+    sol_x0, _ = dspec.sparse_linear_fit_2D(
+        data, weights, time_basis, freq_basis, atol=1e-12, btol=1e-12,
+        iter_lim=1, x0=x_true.ravel(),
+    )
+    np.testing.assert_allclose(sol_x0, x_true, atol=1e-11, rtol=1e-11)
+
+    pytest.raises(
+        ValueError,
+        dspec.sparse_linear_fit_2D,
+        data,
+        -weights,
+        time_basis,
+        freq_basis,
+    )
+
+    with pytest.warns(DeprecationWarning) as legacy_warnings:
+        legacy_sol, legacy_meta = dspec.sparse_linear_fit_2D(
+            data, weights, time_basis, freq_basis,
+            eigenspec_threshold=1e-3,
+            precondition_rcond=1e-8,
+        )
+    assert len(legacy_warnings) == 1
+    assert legacy_meta['precondition_rcond'] == 1e-8
+    np.testing.assert_allclose(legacy_sol, sol_white, atol=1e-8, rtol=1e-8)
+
+
+def test_sparse_linear_fit_2d_precondition_rcond_is_configurable():
+    rng = np.random.default_rng(12)
+    axis_1_basis = np.linalg.qr(rng.standard_normal((12, 2)))[0]
+    axis_1_basis[:, 1] *= 1e-4
+    axis_2_basis = np.linalg.qr(rng.standard_normal((10, 3)))[0]
+    coefficients = rng.standard_normal((2, 3))
+    data = axis_1_basis @ coefficients @ axis_2_basis.T
+    weights = np.ones(data.shape)
+
+    solution_default, meta_default = dspec.sparse_linear_fit_2D(
+        data, weights, axis_1_basis, axis_2_basis,
+    )
+    solution_permissive, meta_permissive = dspec.sparse_linear_fit_2D(
+        data, weights, axis_1_basis, axis_2_basis,
+        precondition_rcond=1e-10,
+    )
+
+    assert not meta_default['preconditioned']
+    assert meta_default['precondition_rcond'] == 1e-6
+    assert meta_permissive['preconditioned']
+    assert meta_permissive['precondition_rcond'] == 1e-10
+    np.testing.assert_allclose(
+        axis_1_basis @ solution_default @ axis_2_basis.T,
+        axis_1_basis @ solution_permissive @ axis_2_basis.T,
+        atol=1e-9,
+        rtol=1e-9,
+    )
+
+
+@pytest.mark.parametrize('precondition_rcond', [-1e-6, 1.0, np.inf, np.nan])
+def test_sparse_linear_fit_2d_validates_precondition_rcond(precondition_rcond):
+    data = np.ones((4, 3))
+    with pytest.raises(ValueError, match='precondition_rcond'):
+        dspec.sparse_linear_fit_2D(
+            data, np.ones_like(data), np.ones((4, 1)), np.ones((3, 1)),
+            precondition_rcond=precondition_rcond,
+        )
+
+
+def test_pcg_helper_breakdown_guards():
+    rhs = np.ones((2, 1))
+    identity = lambda x: x
+
+    # A zero right-hand side exits without entering the iteration.
+    solution, n_iter, converged, residual = dspec._pcg_normal_equations(
+        identity, identity, np.zeros_like(rhs), 1e-8, 4,
+        x0=np.ones_like(rhs),
+    )
+    np.testing.assert_allclose(solution, 1)
+    assert (n_iter, converged, residual) == (0, True, 0.0)
+
+    # A non-positive curvature direction cannot be used by CG.
+    solution, n_iter, converged, residual = dspec._pcg_normal_equations(
+        lambda x: -x, identity, rhs, 1e-8, 4,
+    )
+    np.testing.assert_allclose(solution, 0)
+    assert n_iter == 1
+    assert not converged
+    assert residual == 1
+
+    # Likewise, stop if preconditioning produces a non-positive inner product.
+    calls = 0
+
+    def changing_preconditioner(x):
+        nonlocal calls
+        calls += 1
+        return x if calls == 1 else -x
+
+    d = np.array([[1.0], [2.0]])
+    solution, n_iter, converged, residual = dspec._pcg_normal_equations(
+        lambda x: d * x, changing_preconditioner, rhs, 1e-8, 4,
+    )
+    assert np.all(np.isfinite(solution))
+    assert n_iter == 1
+    assert not converged
+    assert residual < 1
+
+    zero_preconditioner = dspec._kron_normal_preconditioner(
+        np.zeros((3, 4)), np.ones((3, 1)), np.ones((4, 1)), 1e-6,
+    )
+    np.testing.assert_allclose(zero_preconditioner(np.ones((1, 1))), 0)
+
+
+def test_kron_normal_preconditioner_with_complex_bases():
+    """The separable preconditioner is exact and Hermitian for complex bases."""
+    rng = np.random.default_rng(14)
+    axis_1_basis = (
+        rng.standard_normal((9, 3))
+        + 1j * rng.standard_normal((9, 3))
+    )
+    axis_2_basis = (
+        rng.standard_normal((8, 4))
+        + 1j * rng.standard_normal((8, 4))
+    )
+    weights = np.outer(0.5 + rng.random(9), 0.5 + rng.random(8))
+    coefficients = (
+        rng.standard_normal((3, 4))
+        + 1j * rng.standard_normal((3, 4))
+    )
+
+    preconditioner = dspec._kron_normal_preconditioner(
+        weights, axis_1_basis, axis_2_basis, 1e-12,
+    )
+    normal_coefficients = dspec._kron_adjoint(
+        dspec._kron_model(
+            coefficients, axis_1_basis, axis_2_basis
+        ) * weights,
+        axis_1_basis,
+        axis_2_basis,
+    )
+    np.testing.assert_allclose(
+        preconditioner(normal_coefficients), coefficients,
+        atol=1e-11, rtol=1e-11,
+    )
+
+    # A valid PCG preconditioner must be Hermitian in coefficient space.
+    left = (
+        rng.standard_normal((3, 4))
+        + 1j * rng.standard_normal((3, 4))
+    )
+    right = (
+        rng.standard_normal((3, 4))
+        + 1j * rng.standard_normal((3, 4))
+    )
+    np.testing.assert_allclose(
+        np.vdot(left, preconditioner(right)),
+        np.vdot(preconditioner(left), right),
+        atol=1e-11, rtol=1e-11,
+    )
+
+
+def test_sparse_linear_fit_2d_pcg():
+    # method='pcg' must reproduce the LSQR solution on well-determined problems,
+    # in far fewer iterations.
+    ntimes, nfreqs = 100, 50
+    rng = np.random.default_rng(42)
+    freq_basis, _ = dspec.dpss_operator(
+        np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12]
+    )
+    time_basis, _ = dspec.dpss_operator(
+        np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12]
+    )
+    freqs = np.linspace(100e6, 200e6, nfreqs)
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+    data += 1e-3 * rng.standard_normal(data.shape)
+
+    wgts = np.outer(
+        rng.integers(1, 10, size=ntimes), np.ones(nfreqs),
+    )
+    # Frequency dependence, to make the problem more ill-conditioned
+    wgts = wgts * (freqs / 150e6) ** -3.5
+    wgts[rng.random(wgts.shape) < 0.1] = 0
+
+    sol_lsqr, meta_lsqr = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
+        atol=1e-10, btol=1e-10,
+    )
+    sol_pcg, meta_pcg = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts, axis_1_basis=time_basis, axis_2_basis=freq_basis,
+        method='pcg',
+    )
+
+    assert meta_pcg['converged']
+    assert not meta_pcg['fellback']
+    assert meta_pcg['iter_num'] <= 8
+
+    # The two solvers should agree on the fitted model
+    model_lsqr = time_basis @ sol_lsqr @ freq_basis.T
+    model_pcg = time_basis @ sol_pcg @ freq_basis.T
+    np.testing.assert_allclose(model_pcg, model_lsqr, atol=1e-7, rtol=1e-6)
+
+    # ...and PCG must not fit the weighted data any worse than LSQR
+    chi2 = lambda mdl: np.sum(wgts * np.abs(data - mdl) ** 2)
+    assert chi2(model_pcg) <= chi2(model_lsqr) * (1 + 1e-6)
+
+    # A physical-coordinate warm start is accepted on the PCG path.
+    sol_pcg_x0, meta_pcg_x0 = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts, axis_1_basis=time_basis,
+        axis_2_basis=freq_basis, method='pcg', x0=sol_lsqr.ravel(),
+    )
+    assert meta_pcg_x0['converged']
+    model_pcg_x0 = time_basis @ sol_pcg_x0 @ freq_basis.T
+    np.testing.assert_allclose(model_pcg_x0, model_lsqr, atol=1e-7, rtol=1e-6)
+
+    # An unknown method is rejected
+    pytest.raises(
+        ValueError,
+        dspec.sparse_linear_fit_2D,
+        data=data,
+        weights=wgts,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+        method='not-a-solver',
+    )
+
+
+@pytest.mark.parametrize('method', ['lsqr', 'lsmr'])
+def test_sparse_linear_fit_2d_rejects_pcg_tol_for_other_methods(method):
+    data = np.ones((4, 3))
+    with pytest.raises(ValueError, match="only valid when `method='pcg'`"):
+        dspec.sparse_linear_fit_2D(
+            data, np.ones_like(data), np.ones((4, 1)), np.ones((3, 1)),
+            method=method, pcg_tol=1e-8,
+        )
+
+
+@pytest.mark.parametrize('pcg_tol', [0, -1e-8, np.inf, np.nan])
+def test_sparse_linear_fit_2d_validates_pcg_tol(pcg_tol):
+    data = np.ones((4, 3))
+    with pytest.raises(ValueError, match="positive finite scalar"):
+        dspec.sparse_linear_fit_2D(
+            data, np.ones_like(data), np.ones((4, 1)), np.ones((3, 1)),
+            method='pcg', pcg_tol=pcg_tol,
+        )
+
+
+def test_sparse_linear_fit_2d_pcg_falls_back_to_lsqr(monkeypatch):
+    # When PCG cannot reach pcg_tol the solve is redone with LSQR. Check that the
+    # fallback fires, warns, still returns a usable answer, and reports both
+    # solvers' diagnostics without leaking those keys into the other paths.
+    ntimes, nfreqs = 120, 100
+    rng = np.random.default_rng(3)
+    freq_basis, _ = dspec.dpss_operator(
+        np.linspace(100e6, 200e6, nfreqs), [0], [300e-9], eigenval_cutoff=[1e-12]
+    )
+    time_basis, _ = dspec.dpss_operator(
+        np.linspace(0, ntimes * 10, ntimes), [0], [2e-3], eigenval_cutoff=[1e-12]
+    )
+    x_true = rng.normal(0, 1, size=(time_basis.shape[-1], freq_basis.shape[-1]))
+    data = np.dot(time_basis, x_true).dot(freq_basis.T)
+
+    # Only a small sub-block carries any weight, which leaves the fit badly
+    # underdetermined and rejects PCG.
+    wgts = np.zeros((ntimes, nfreqs))
+    wgts[30:90, 20:55] = 1.0
+
+    with pytest.warns(
+        RuntimeWarning, match="falling back to LSQR"
+    ) as rank_warnings:
+        sol, meta = dspec.sparse_linear_fit_2D(
+            data=data, weights=wgts, axis_1_basis=time_basis,
+            axis_2_basis=freq_basis, method='pcg', pcg_tol=1e-14, iter_lim=40,
+        )
+    assert rank_warnings[0].filename == __file__
+    assert meta['fellback']
+    assert not meta['converged']
+    assert 'pcg_iter_num' in meta and 'pcg_resid' in meta
+    assert 'istop' in meta                      # came from the LSQR re-solve
+    assert np.all(np.isfinite(sol))
+    assert sol.shape == (time_basis.shape[-1], freq_basis.shape[-1])
+
+    # A converging PCG solve must not report a fallback or expose pcg_* keys
+    wgts_ok = np.ones((ntimes, nfreqs))
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts_ok, axis_1_basis=time_basis,
+        axis_2_basis=freq_basis, method='pcg',
+    )
+    assert meta['converged']
+    assert not meta['fellback']
+    assert 'pcg_iter_num' not in meta
+
+    # ...and neither must a plain LSQR solve
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data, weights=wgts_ok, axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+    assert 'pcg_iter_num' not in meta
+    assert 'fellback' not in meta
+
+    # Exercise a genuine iterative stall separately from the rank-aware early
+    # rejection above, and verify that it also retries with LSQR.
+    observed_iter_lim = None
+
+    def stalled_pcg(matvec, precond, rhs, tol, iter_lim, x0=None):
+        nonlocal observed_iter_lim
+        observed_iter_lim = iter_lim
+        return np.zeros_like(rhs), 3, False, 0.25
+
+    with monkeypatch.context() as patch:
+        patch.setattr(dspec, '_pcg_normal_equations', stalled_pcg)
+        with pytest.warns(
+            RuntimeWarning, match="PCG did not converge"
+        ) as convergence_warnings:
+            sol_stalled, meta_stalled = dspec.sparse_linear_fit_2D(
+                data=data, weights=wgts_ok, axis_1_basis=time_basis,
+                axis_2_basis=freq_basis, method='pcg',
+            )
+    assert convergence_warnings[0].filename == __file__
+    assert np.all(np.isfinite(sol_stalled))
+    assert meta_stalled['fellback']
+    assert meta_stalled['pcg_iter_num'] == 3
+    assert meta_stalled['pcg_resid'] == 0.25
+    assert observed_iter_lim == 2 * time_basis.shape[1] * freq_basis.shape[1]
+
+
+def test_precondition_sparse_solver_degenerate_weights():
+    # Rank-aware whitening must remain finite for almost or entirely empty data.
+    ntimes, nfreqs = 60, 40
+    rng = np.random.default_rng(42)
+    freq_basis, _ = dspec.dpss_operator(
+        np.linspace(100e6, 200e6, nfreqs), [0], [20e-9], eigenval_cutoff=[1e-12]
+    )
+    time_basis, _ = dspec.dpss_operator(
+        np.linspace(0, ntimes * 10, ntimes), [0], [1e-3], eigenval_cutoff=[1e-12]
+    )
+    data = rng.normal(0, 1, size=(ntimes, nfreqs)) + 0j
+
+    # A single unflagged channel leaves a Gramian dominated by one eigenvalue
+    wgts = np.zeros((ntimes, nfreqs))
+    wgts[:, 5] = 1.0
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=wgts,
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+    assert np.all(np.isfinite(sol))
+    assert not meta['preconditioned']
+
+    # A fully flagged waterfall gives an all-zero Gramian
+    sol, meta = dspec.sparse_linear_fit_2D(
+        data=data,
+        weights=np.zeros((ntimes, nfreqs)),
+        axis_1_basis=time_basis,
+        axis_2_basis=freq_basis,
+    )
+    np.testing.assert_allclose(sol, 0.0, atol=1e-12)
+    assert not meta['preconditioned']
