@@ -1150,7 +1150,7 @@ def test_dpss_pcg_matches_solve(filter_dim, filter_center):
     )
     pcg_model, pcg_residual, pcg_info = dspec.fourier_filter(
         x, data, wgts, mode='dpss_pcg', tol=1e-11,
-        maxiter=500, **options,
+        maxiter=500, batch_size=5, **options,
     )
 
     np.testing.assert_allclose(pcg_model, solve_model, rtol=1e-8, atol=1e-9)
@@ -1160,6 +1160,7 @@ def test_dpss_pcg_matches_solve(filter_dim, filter_center):
     axis = f'axis_{filter_dim}'
     assert set(pcg_info['status'][axis].values()) == {'success'}
     assert pcg_info['filter_params'][axis]['mode'] == 'dpss_pcg'
+    assert pcg_info['filter_params'][axis]['batch_size'] == 5
     assert all(
         item['converged']
         and item['iter_num'] <= 500
@@ -1261,6 +1262,7 @@ def test_dpss_pcg_supports_1d_input_and_caches_only_basis():
     [
         ({'tol': 0}, 'tol must be'),
         ({'maxiter': 0}, 'maxiter must be'),
+        ({'batch_size': 0}, 'batch_size must be'),
     ],
 )
 def test_dpss_pcg_validates_solver_options(extra_kwargs, match):
@@ -2114,6 +2116,54 @@ def test_pcg_helper_breakdown_guards():
     np.testing.assert_allclose(zero_preconditioner(np.ones((1, 1))), 0)
 
 
+def test_kron_normal_preconditioner_with_complex_bases():
+    """The separable preconditioner is exact and Hermitian for complex bases."""
+    rng = np.random.default_rng(14)
+    axis_1_basis = (
+        rng.standard_normal((9, 3))
+        + 1j * rng.standard_normal((9, 3))
+    )
+    axis_2_basis = (
+        rng.standard_normal((8, 4))
+        + 1j * rng.standard_normal((8, 4))
+    )
+    weights = np.outer(0.5 + rng.random(9), 0.5 + rng.random(8))
+    coefficients = (
+        rng.standard_normal((3, 4))
+        + 1j * rng.standard_normal((3, 4))
+    )
+
+    preconditioner = dspec._kron_normal_preconditioner(
+        weights, axis_1_basis, axis_2_basis, 1e-12,
+    )
+    normal_coefficients = dspec._kron_adjoint(
+        dspec._kron_model(
+            coefficients, axis_1_basis, axis_2_basis
+        ) * weights,
+        axis_1_basis,
+        axis_2_basis,
+    )
+    np.testing.assert_allclose(
+        preconditioner(normal_coefficients), coefficients,
+        atol=1e-11, rtol=1e-11,
+    )
+
+    # A valid PCG preconditioner must be Hermitian in coefficient space.
+    left = (
+        rng.standard_normal((3, 4))
+        + 1j * rng.standard_normal((3, 4))
+    )
+    right = (
+        rng.standard_normal((3, 4))
+        + 1j * rng.standard_normal((3, 4))
+    )
+    np.testing.assert_allclose(
+        np.vdot(left, preconditioner(right)),
+        np.vdot(preconditioner(left), right),
+        atol=1e-11, rtol=1e-11,
+    )
+
+
 def test_sparse_linear_fit_2d_pcg():
     # method='pcg' must reproduce the LSQR solution on well-determined problems,
     # in far fewer iterations.
@@ -2255,7 +2305,11 @@ def test_sparse_linear_fit_2d_pcg_falls_back_to_lsqr(monkeypatch):
 
     # Exercise a genuine iterative stall separately from the rank-aware early
     # rejection above, and verify that it also retries with LSQR.
+    observed_iter_lim = None
+
     def stalled_pcg(matvec, precond, rhs, tol, iter_lim, x0=None):
+        nonlocal observed_iter_lim
+        observed_iter_lim = iter_lim
         return np.zeros_like(rhs), 3, False, 0.25
 
     with monkeypatch.context() as patch:
@@ -2272,6 +2326,7 @@ def test_sparse_linear_fit_2d_pcg_falls_back_to_lsqr(monkeypatch):
     assert meta_stalled['fellback']
     assert meta_stalled['pcg_iter_num'] == 3
     assert meta_stalled['pcg_resid'] == 0.25
+    assert observed_iter_lim == 2 * time_basis.shape[1] * freq_basis.shape[1]
 
 
 def test_precondition_sparse_solver_degenerate_weights():

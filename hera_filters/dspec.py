@@ -24,7 +24,8 @@ DPSS_DEFAULTS_1D = {'suppression_factors' :  [1e-9],
                'max_contiguous_edge_flags' : 10}
 DPSS_PCG_DEFAULTS_1D = {**DPSS_DEFAULTS_1D,
                         'tol': 1e-8,
-                        'maxiter': 500}
+                        'maxiter': 500,
+                        'batch_size': 512}
 DFT_DEFAULTS_1D = {'suppression_factors' : [1e-9],
                 'fundamental_period' : np.nan,
                 'max_contiguous_edge_flags' : 10}
@@ -40,7 +41,8 @@ DPSS_DEFAULTS_2D = {'suppression_factors' : [[1e-9], [1e-9]],
                'max_contiguous_edge_flags' : 10}
 DPSS_PCG_DEFAULTS_2D = {**DPSS_DEFAULTS_2D,
                         'tol': 1e-8,
-                        'maxiter': 500}
+                        'maxiter': 500,
+                        'batch_size': 512}
 DFT_DEFAULTS_2D = {'suppression_factors' : [[1e-9], [1e-9]],
                 'fundamental_period' : [np.nan, np.nan],
                 'max_contiguous_edge_flags' : 10}
@@ -481,6 +483,10 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                                 for ``dpss_pcg``. Default is 1e-8.
                             maxiter : int, optional
                                 Maximum number of PCG iterations for ``dpss_pcg``. Default is 500.
+                            batch_size : int, optional
+                                Number of independent spectra solved together by ``dpss_pcg``.
+                                Larger batches use more memory and may improve matrix-multiplication
+                                throughput. Default is 512.
                         * clean :
                              defaults can be accessed in dspec.CLEAN_DEFAULTS
                              tol : float,
@@ -686,13 +692,15 @@ def fourier_filter(x, data, wgts, filter_centers, filter_half_widths, mode, ridg
                        max_contiguous_edge_flags = filter_kwargs.pop('max_contiguous_edge_flags')
                        pcg_tol = filter_kwargs.pop('tol', 1e-8)
                        pcg_maxiter = filter_kwargs.pop('maxiter', 500)
+                       pcg_batch_size = filter_kwargs.pop('batch_size', 512)
                        #if filter2d is True, create fitting_options that is a 2-list for 0 and 1 dimension
                        model, residual, info = _fit_basis_2d(x=x, data=data, filter_centers=filter_centers, filter_dims=filter_dims_d,
                                                            skip_wgt=skip_wgt, basis=mode[0], method=mode[1], wgts=wgts, basis_options=filter_kwargs,
                                                            filter_half_widths=filter_half_widths, suppression_factors=suppression_factors,
                                                            cache=cache, cache_solver_products=cache_solver_products, max_contiguous_edge_flags=max_contiguous_edge_flags,
                                                            zero_residual_flags=zero_residual_flags, ridge_alpha=ridge_alpha,
-                                                           pcg_tol=pcg_tol, pcg_maxiter=pcg_maxiter)
+                                                           pcg_tol=pcg_tol, pcg_maxiter=pcg_maxiter,
+                                                           pcg_batch_size=pcg_batch_size)
                    elif mode[0] == 'clean':
                        if zero_residual_flags is None:
                            zero_residual_flags = False
@@ -2068,24 +2076,24 @@ def _clean_filter(x, data, wgts, filter_centers, filter_half_widths,
 
 
 
-_DPSS_PCG_BATCH_SIZE = 512
-
-
 def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
                    basis_options, suppression_factors=None, cache=None,
-                   ridge_alpha=0.0, tol=1e-8, maxiter=500):
+                   ridge_alpha=0.0, tol=1e-8, maxiter=500,
+                   batch_size=512):
     """Fit independent rows to a DPSS basis with batched Jacobi-PCG.
 
     This solves the same normal equations as ``dpss_solve`` without forming
     one dense normal matrix per row. Rows converge independently, while the
-    basis applications for up to ``_DPSS_PCG_BATCH_SIZE`` rows are combined
-    into matrix multiplications. An exactly real DPSS basis uses real BLAS;
-    complex data are split into their real and imaginary systems in that case.
+    basis applications for up to ``batch_size`` rows are combined into matrix
+    multiplications. An exactly real DPSS basis uses real BLAS; complex data
+    are split into their real and imaginary systems in that case.
     """
     if not np.isscalar(tol) or not np.isfinite(tol) or tol <= 0:
         raise ValueError("tol must be a positive finite scalar for dpss_pcg.")
     if not isinstance(maxiter, (int, np.integer)) or maxiter < 1:
         raise ValueError("maxiter must be a positive integer for dpss_pcg.")
+    if not isinstance(batch_size, (int, np.integer)) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer for dpss_pcg.")
     if np.iscomplexobj(wgts):
         if np.any(np.imag(wgts) != 0):
             raise ValueError("dpss_pcg requires real weights.")
@@ -2122,6 +2130,7 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
     info['nterms'] = nterms
     info['tol'] = tol
     info['maxiter'] = maxiter
+    info['batch_size'] = batch_size
     info['skipped'] = False
 
     # Zero-centered DPSS operators are stored as complex arrays despite being
@@ -2149,8 +2158,8 @@ def _fit_basis_pcg(x, data, wgts, filter_centers, filter_half_widths,
     converged = np.zeros(data.shape[0], dtype=bool)
     relative_residual = np.full(data.shape[0], np.inf, dtype=float)
 
-    for start in range(0, data.shape[0], _DPSS_PCG_BATCH_SIZE):
-        stop = min(start + _DPSS_PCG_BATCH_SIZE, data.shape[0])
+    for start in range(0, data.shape[0], batch_size):
+        stop = min(start + batch_size, data.shape[0])
         data_batch = np.ascontiguousarray(data[start:stop])
         weight_batch = np.ascontiguousarray(wgts[start:stop])
         nrows = stop - start
@@ -2314,7 +2323,8 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                 basis_options, suppression_factors=None,
                 method='leastsq', basis='dft', cache=None, cache_solver_products=True,
                 filter_dims = 1, skip_wgt=0.1, max_contiguous_edge_flags=5, ridge_alpha=0.0,
-                zero_residual_flags=True, pcg_tol=1e-8, pcg_maxiter=500):
+                zero_residual_flags=True, pcg_tol=1e-8, pcg_maxiter=500,
+                pcg_batch_size=512):
     r"""
     A 1d linear-least-squares fitting function for computing models and residuals for fitting of the form
     y_model = A @ c
@@ -2417,6 +2427,8 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
         ``method='pcg'``. Default is 1e-8.
     pcg_maxiter: int, optional
         Maximum iterations used when ``method='pcg'``. Default is 500.
+    pcg_batch_size: int, optional
+        Number of independent spectra solved in each PCG batch. Default is 512.
 
     Returns
     -------
@@ -2497,7 +2509,7 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                 suppression_factors=suppression_factors[1],
                 basis_options=basis_options[1], cache=cache,
                 ridge_alpha=ridge_alpha, tol=pcg_tol,
-                maxiter=pcg_maxiter,
+                maxiter=pcg_maxiter, batch_size=pcg_batch_size,
             )
             model[valid_rows] = pcg_model
             for result_index, row_index in enumerate(np.flatnonzero(valid_rows)):
@@ -2549,6 +2561,10 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
         info['filter_params']['axis_1']['suppression_factors'] = info_t['suppression_factors']
         info['filter_params']['axis_1']['basis_options'] = info_t['basis_options']
         info['filter_params']['axis_1']['mode'] = info_t['basis'] + '_' + method
+        if method == 'pcg':
+            info['filter_params']['axis_1']['tol'] = info_t['tol']
+            info['filter_params']['axis_1']['maxiter'] = info_t['maxiter']
+            info['filter_params']['axis_1']['batch_size'] = info_t['batch_size']
     if filter2d:
         wgts_time = np.ones_like(wgts)
         for i in range(data.shape[0]):
@@ -2568,7 +2584,7 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
                     suppression_factors=suppression_factors[0],
                     basis_options=basis_options[0], cache=cache,
                     ridge_alpha=ridge_alpha, tol=pcg_tol,
-                    maxiter=pcg_maxiter,
+                    maxiter=pcg_maxiter, batch_size=pcg_batch_size,
                 )
                 model.T[valid_columns] = pcg_model
                 for result_index, column_index in enumerate(
@@ -2618,6 +2634,10 @@ def _fit_basis_2d(x, data, wgts, filter_centers, filter_half_widths,
             info['filter_params']['axis_0']['suppression_factors'] = info_t['suppression_factors']
             info['filter_params']['axis_0']['basis_options'] = info_t['basis_options']
             info['filter_params']['axis_0']['mode'] = info_t['basis'] + '_' + method
+            if method == 'pcg':
+                info['filter_params']['axis_0']['tol'] = info_t['tol']
+                info['filter_params']['axis_0']['maxiter'] = info_t['maxiter']
+                info['filter_params']['axis_0']['batch_size'] = info_t['batch_size']
 
     residual = (data - model) * (np.abs(wgts) > 0).astype(float)
     #this will only happen if filter_dims is only zero!
@@ -3425,17 +3445,18 @@ def _kron_normal_preconditioner(weights: np.ndarray, axis_1_basis: np.ndarray,
     """
     Build an approximate inverse of the normal operator for the 2D fit.
 
-    The normal operator of the weighted problem is
+    The model uses an ordinary transpose along the second axis, so the normal
+    operator of the weighted problem is
 
-        N(X) = A1^H ( W . (A1 X A2^H) ) A2
+        N(X) = A1^H ( W . (A1 X A2^T) ) A2^*.
 
-    Writing the SVD ``W = sum_k s_k u_k v_k^H`` factorises this *exactly* as a
-    sum of Kronecker products, ``N(X) = sum_k G1_k X G2_k``, with
-    ``G1_k = A1^H diag(s_k u_k) A1`` and ``G2_k = A2^H diag(v_k) A2``. The leading
-    term alone is a good approximation whenever the weights are close to
-    separable, which holds for inverse-variance weights built from smooth
-    autocorrelations, and it is inverted exactly by one Hermitian
-    eigendecomposition per axis.
+    Writing the real weight matrix as ``W = sum_k s_k u_k v_k^T`` factorises
+    this *exactly* as ``N(X) = sum_k G1_k X conj(G2_k)``, with
+    ``G1_k = A1^H diag(s_k u_k) A1`` and
+    ``G2_k = A2^H diag(v_k) A2``. The leading term alone is a good approximation
+    whenever the weights are close to separable, which holds for
+    inverse-variance weights built from smooth autocorrelations, and it is
+    inverted exactly by one Hermitian eigendecomposition per axis.
 
     Parameters:
     ----------
@@ -3471,8 +3492,8 @@ def _kron_normal_preconditioner(weights: np.ndarray, axis_1_basis: np.ndarray,
     inv_diag = np.outer(inv_1, inv_2)
 
     def apply(residual):
-        transformed = eigenvecs_1.T.conj() @ residual @ eigenvecs_2
-        return eigenvecs_1 @ (transformed * inv_diag) @ eigenvecs_2.T.conj()
+        transformed = eigenvecs_1.T.conj() @ residual @ eigenvecs_2.conj()
+        return eigenvecs_1 @ (transformed * inv_diag) @ eigenvecs_2.T
 
     return apply
 
@@ -3587,7 +3608,9 @@ def sparse_linear_fit_2D(
         implicit Kronecker product of `axis_1_basis` and `axis_2_basis`, and b is the
         flattened `data` array, x is the solution, and r is the residual.
     iter_lim : int, optional
-        Maximum number of iterations, default is the scipy solver's default.
+        Maximum number of iterations. LSQR and LSMR use the scipy solver's
+        default. PCG defaults to twice the number of fitted coefficients before
+        falling back to LSQR.
     method : {'lsqr', 'lsmr', 'pcg'}, optional, default 'lsqr'
         Which iterative solver to use.
 
@@ -3740,7 +3763,7 @@ def sparse_linear_fit_2D(
         pcg_x0 = kwargs.get('x0', None)
         x, n_iter, converged, resid = _pcg_normal_equations(
             normal_matvec, precond, rhs, pcg_tol,
-            iter_lim if iter_lim is not None else 10 * nmode_1 * nmode_2,
+            iter_lim if iter_lim is not None else 2 * nmode_1 * nmode_2,
             x0=None if pcg_x0 is None else np.reshape(
                 pcg_x0, (nmode_1, nmode_2)
             )
