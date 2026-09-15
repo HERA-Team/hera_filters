@@ -1287,6 +1287,164 @@ def test_dpss_pcg_rejects_negative_weights():
             max_contiguous_edge_flags=len(x),
         )
 
+def test_dpss_pcg_accepts_complex_typed_real_weights():
+    """Complex weight arrays without an imaginary part are demoted, not rejected."""
+    rng = np.random.default_rng(46)
+    x = np.arange(48, dtype=float)
+    data = rng.normal(size=(4, x.size)) + 1j * rng.normal(size=(4, x.size))
+    wgts = rng.uniform(0.2, 1.3, size=data.shape)
+    options = {
+        'filter_centers': [0.0],
+        'filter_half_widths': [0.1],
+        'suppression_factors': [1e-9],
+        'eigenval_cutoff': [1e-9],
+        'max_contiguous_edge_flags': len(x),
+    }
+
+    real_model, _, _ = dspec.fourier_filter(
+        x, data, wgts, mode='dpss_pcg', tol=1e-12, **options,
+    )
+    complex_model, _, info = dspec.fourier_filter(
+        x, data, wgts.astype(complex), mode='dpss_pcg', tol=1e-12, **options,
+    )
+
+    np.testing.assert_allclose(complex_model, real_model, rtol=1e-10, atol=1e-12)
+    assert set(info['status']['axis_1'].values()) == {'success'}
+
+    # A weight with an actual imaginary part is an error rather than a silent cast.
+    imaginary_wgts = wgts.astype(complex)
+    imaginary_wgts[0, 5] += 0.5j
+    with pytest.raises(ValueError, match='requires real weights'):
+        dspec.fourier_filter(
+            x, data, imaginary_wgts, mode='dpss_pcg', **options,
+        )
+
+
+def test_fit_basis_pcg_cache_and_suppression_defaults():
+    """The helper allocates its own cache and defaults to no suppression."""
+    rng = np.random.default_rng(47)
+    x = np.arange(48, dtype=float)
+    data = rng.normal(size=(3, x.size)) + 1j * rng.normal(size=(3, x.size))
+    wgts = rng.uniform(0.2, 1.3, size=data.shape)
+    options = {
+        'filter_centers': [0.0],
+        'filter_half_widths': [0.1],
+        'basis_options': {'eigenval_cutoff': [1e-9]},
+        'tol': 1e-12,
+    }
+
+    default_model, _, converged, _, info = dspec._fit_basis_pcg(
+        x=x, data=data, wgts=wgts, suppression_factors=None, cache=None, **options,
+    )
+    # Leaving suppression_factors unset must match asking for zero suppression.
+    cache = {}
+    explicit_model, *_ = dspec._fit_basis_pcg(
+        x=x, data=data, wgts=wgts, suppression_factors=[0.0], cache=cache, **options,
+    )
+
+    np.testing.assert_allclose(default_model, explicit_model, rtol=1e-10, atol=1e-12)
+    assert np.all(converged)
+    assert info['suppression_factors'] is None
+    # The externally supplied cache only ever holds the basis.
+    assert len(cache) == 1
+
+
+def test_fit_basis_2d_pcg_requires_dpss_basis():
+    """PCG has no DFT implementation, so asking for one is rejected up front."""
+    x = np.arange(32, dtype=float)
+    data = np.ones((2, x.size), dtype=complex)
+    wgts = np.ones_like(data.real)
+    with pytest.raises(ValueError, match='only the DPSS basis'):
+        dspec._fit_basis_2d(
+            x=x, data=data, wgts=wgts, filter_centers=[0.0],
+            filter_half_widths=[0.1],
+            basis_options={'fundamental_period': 2 * x.size},
+            method='pcg', basis='dft', filter_dims=1,
+        )
+
+
+def test_dpss_pcg_two_axis_reports_maxiter_on_time_axis():
+    """Unconverged time columns are reported as 'maxiter' and warned about."""
+    rng = np.random.default_rng(48)
+    ntimes, nfreqs = 20, 24
+    data = (
+        rng.normal(size=(ntimes, nfreqs))
+        + 1j * rng.normal(size=(ntimes, nfreqs))
+    )
+    # Fully flagged times leave a non-diagonal system on the time axis, which a
+    # single Jacobi-PCG iteration cannot converge.
+    wgts = np.ones((ntimes, nfreqs))
+    wgts[[2, 3, 4, 9, 13, 14, 17]] = 0.0
+    x = [np.arange(ntimes, dtype=float), np.arange(nfreqs, dtype=float)]
+    options = {
+        'filter_centers': [[0.0], [0.0]],
+        'filter_half_widths': [[0.15], [0.15]],
+        'suppression_factors': [[1e-9], [1e-9]],
+        'eigenval_cutoff': [[1e-9], [1e-9]],
+        'max_contiguous_edge_flags': ntimes,
+        'filter_dims': [1, 0],
+    }
+
+    with pytest.warns(RuntimeWarning, match=r'did not converge for \d+ of \d+ columns'):
+        model, _, info = dspec.fourier_filter(
+            x, data, wgts, mode='dpss_pcg', tol=1e-14, maxiter=1, **options,
+        )
+
+    assert set(info['status']['axis_0'].values()) == {'maxiter'}
+    assert not any(
+        item['converged'] for item in info['solver_info']['axis_0'].values()
+    )
+    # The last iterate is still returned, so the model stays usable.
+    assert np.all(np.isfinite(model))
+
+
+def test_fourier_filter_2d_records_time_axis_skips(monkeypatch):
+    """Time columns that are gated out or skipped by the fit are reported as such."""
+    rng = np.random.default_rng(49)
+    ntimes, nfreqs = 20, 24
+    data = (
+        rng.normal(size=(ntimes, nfreqs))
+        + 1j * rng.normal(size=(ntimes, nfreqs))
+    )
+    x = [np.arange(ntimes, dtype=float), np.arange(nfreqs, dtype=float)]
+    options = {
+        'filter_centers': [[0.0], [0.0]],
+        'filter_half_widths': [[0.15], [0.15]],
+        'suppression_factors': [[1e-9], [1e-9]],
+        'eigenval_cutoff': [[1e-9], [1e-9]],
+        'filter_dims': [1, 0],
+        'cache_solver_products': False,
+    }
+
+    # Flagging the leading times skips those rows on axis 1, which leaves every
+    # time column failing the contiguous-edge-flag cut on axis 0.
+    edge_flagged_wgts = np.ones((ntimes, nfreqs))
+    edge_flagged_wgts[:6] = 0.0
+    _, _, info = dspec.fourier_filter(
+        x, data, edge_flagged_wgts, mode='dpss_solve',
+        max_contiguous_edge_flags=5, **options,
+    )
+    assert set(info['status']['axis_0'].values()) == {'skipped'}
+    assert info['filter_params']['axis_0'] == {}
+
+    # A time-axis fit that reports a skip must not be recorded as a success.
+    fit_basis_1d = dspec._fit_basis_1d
+
+    def skip_time_axis_fits(**kwargs):
+        model, resid, info_t = fit_basis_1d(**kwargs)
+        if len(kwargs['x']) == ntimes:
+            info_t['skipped'] = True
+        return model, resid, info_t
+
+    monkeypatch.setattr(dspec, '_fit_basis_1d', skip_time_axis_fits)
+    _, _, info = dspec.fourier_filter(
+        x, data, np.ones((ntimes, nfreqs)), mode='dpss_solve',
+        max_contiguous_edge_flags=ntimes, **options,
+    )
+    assert set(info['status']['axis_1'].values()) == {'success'}
+    assert set(info['status']['axis_0'].values()) == {'skipped'}
+
+
 def test_regularized_regression():
     nfreqs = 500
     freqs = np.linspace(50e6, 250e6, nfreqs)
