@@ -128,3 +128,5 @@ dmypy.json
 # Pyre type checker
 .pyre/
 hera_filters/_version.py
+.DS_Store
+hera_filters/.DS_Store
