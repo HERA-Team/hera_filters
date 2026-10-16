@@ -502,6 +502,17 @@ def test_dpss_operator_matches_full_taper_request(nx, missing):
     pytest.raises(ValueError, dspec.dpss_operator, x, [0.], [0.01 / (nx * dx)], eigenval_cutoff=[0.5])
 
 
+@pytest.mark.parametrize("container", [list, tuple])
+def test_dpss_operator_list_and_tuple_x(container):
+    # uniformly spaced x given as a list or tuple must give the same operator as the same x as an ndarray
+    x = 150e6 + np.arange(100) * 97656.25
+    for kwargs in [dict(nterms=[5]), dict(eigenval_cutoff=[1e-9])]:
+        amat, nterms = dspec.dpss_operator(container(x.tolist()), [0.], [300e-9], **kwargs)
+        amat_array, nterms_array = dspec.dpss_operator(x, [0.], [300e-9], **kwargs)
+        assert nterms == nterms_array
+        np.testing.assert_array_equal(amat, amat_array)
+
+
 def test_fit_solution_matrix():
     #test for dft and dpss
     fs = np.arange(-50,50)
