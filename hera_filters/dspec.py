@@ -2937,6 +2937,42 @@ def pswf_operator(
     return cache[opkey]
 
 
+def _dpss_above_eigenval_cutoff(M, NW, eigenval_cutoff, kmax):
+    """DPSS tapers and concentration ratios, enough of them to find those above eigenval_cutoff.
+
+    Serves the same purpose as `windows.dpss(M, NW, kmax, return_ratios=True)`, but requests
+    fewer tapers when that suffices, since scipy's cost scales with the number requested.
+    kmax, dpss_operator's bound on the number of ratios above eigenval_cutoff (Slepian 1978
+    + Karnik et al. 2020), adds to 2NW a bound on the width of the whole plunge region that
+    grows with log(4M), so for M >> NW it is several times the number kept (e.g. ~60 vs.
+    5-30 for fringe-rate filters over ~3700 integrations). The ratios instead drop below
+    eigenval_cutoff about log(pi NW) log(1 / eigenval_cutoff) / pi^2 tapers past 2NW
+    (Landau & Widom 1980), so:
+
+    * First request about that many, with constants chosen so that this was never too few
+      for M = 16-8000, NW = 0.005-250, and eigenval_cutoff = 1e-15-0.5.
+    * Keep them if the last ratio is below eigenval_cutoff: the ratios decrease
+      monotonically, so all the ones not computed are below it too.
+    * Otherwise, or if any ratio is close enough to eigenval_cutoff that roundoff could
+      put it on the other side, request kmax, as before.
+
+    Either way, the same tapers are found above eigenval_cutoff. Requesting a different number
+    changes the tapers by roundoff (~1e-13), since LAPACK's inverse iteration orthogonalizes
+    each against the others requested, and their ratios by up to ~5e-16 (1e-14 relative near 1),
+    well inside the tolerance used for "close enough". Cutoffs at or below that tolerance can
+    never be confirmed, so for them kmax are requested directly.
+    """
+    atol, rtol = 1e-14, 1e-10
+    if NW > 0 and atol < eigenval_cutoff < 1:
+        nguess = int(2 * NW + 2 + np.log(4 * np.pi * NW + 3)
+                     * np.log(4 / (eigenval_cutoff * (1 - eigenval_cutoff))) / np.pi ** 2)
+        if nguess < kmax:
+            dpss_vectors, eigvals = windows.dpss(M, NW, nguess, return_ratios=True)
+            if eigvals[-1] < eigenval_cutoff and not np.any(np.isclose(eigvals, eigenval_cutoff, rtol=rtol, atol=atol)):
+                return dpss_vectors, eigvals
+    return windows.dpss(M, NW, kmax, return_ratios=True)
+
+
 def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cutoff=None,
         edge_suppression=None, nterms=None, avg_suppression=None, xc=None, hash_decimal=10,
         xtol=1e-3):
@@ -3017,7 +3053,6 @@ def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cu
             raise ValueError('x values must be equally spaced for DPSS operator!')
         nf = len(x)
         df = np.abs(x[1]-x[0])
-        xg, yg = np.meshgrid(x,x)
         amat = []
         if xc is None:
             xc = x[nf//2]
@@ -3028,7 +3063,7 @@ def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cu
                 if not eigenval_cutoff is None:
                     # Estimate the number of eigenvalues > eigenval_cutoff - Slepian 1978 + Karnik 2020
                     Nw = 2 * nf * df * fw + 2 / np.pi ** 2 * np.log(4 * nf) * np.log(4 / (eigenval_cutoff[fn] * (1 - eigenval_cutoff[fn])))
-                    dpss_vectors, eigvals = windows.dpss(nf, nf * df * fw, int(min(Nw, nf)), return_ratios=True)
+                    dpss_vectors, eigvals = _dpss_above_eigenval_cutoff(nf, nf * df * fw, eigenval_cutoff[fn], int(min(Nw, nf)))
                     nterms.append(np.max(np.where(eigvals>=eigenval_cutoff[fn])))
                 if not edge_suppression is None:
                     dpss_vectors = windows.dpss(nf, nf * df * fw, nf)
@@ -3047,11 +3082,11 @@ def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cu
                     rms_residuals = np.asarray([ np.sqrt(np.mean(np.abs(sinc_vector - np.sum(fit_components[:k],axis=0))**2.)) for k in range(nf)])
                     nterms.append(np.max(np.where(rms_residuals>=avg_suppression[fn])))
 
-                amat.append(np.exp(2j * np.pi * (yg[:,:nterms[fn]]-xc) * fc ) * dpss_vectors[:nterms[fn]].T )
+                amat.append(np.exp(2j * np.pi * (x[:, None] - xc) * fc ) * dpss_vectors[:nterms[fn]].T )
 
         else:
             for fc, fw, nt in zip(filter_centers, filter_half_widths, nterms):
-                amat.append(np.exp(2j * np.pi * (yg[:,:nt]-xc) * fc ) * windows.dpss(nf, nf * df * fw, nt).T )
+                amat.append(np.exp(2j * np.pi * (x[:, None] - xc) * fc ) * windows.dpss(nf, nf * df * fw, nt).T )
 
         if len(amat) > 1:
             amat = np.hstack(amat)
