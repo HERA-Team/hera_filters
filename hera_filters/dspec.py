@@ -3045,6 +3045,7 @@ def dpss_operator(x, filter_centers, filter_half_widths, cache=None, eigenval_cu
         # x is a version of x with the in-between grid values filled in and inserted is a boolean vector
         # set to True wherever a value for x was inserted and False otherwise.
         x, _, _, inserted = place_data_on_uniform_grid(x, np.zeros(len(x)), np.ones(len(x)))
+        x = np.asarray(x)  # place_data_on_uniform_grid returns already uniformly spaced lists and tuples as they are
         # if this is not successful, then throw a value error..
         if not np.allclose(np.diff(x), np.median(np.diff(x)), rtol=0., atol=np.abs(xtol * np.median(np.diff(x)))):
             #for now, don't support DPSS iterpolation unless x is equally spaced.
