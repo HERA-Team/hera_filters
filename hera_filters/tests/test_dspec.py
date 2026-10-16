@@ -440,6 +440,68 @@ def test_dpss_operator():
         np.testing.assert_allclose(amat4[:,m], dpss_mat[:,m])
 
 
+def _dpss_operator_full_bound(x, filter_centers, filter_half_widths, eigenval_cutoff):
+    # dpss_operator's eigenval_cutoff path as it was before it stopped requesting every taper up to the
+    # Slepian/Karnik bound and phasing them with an N x N meshgrid, to pin its results to the old ones
+    x, _, _, inserted = dspec.place_data_on_uniform_grid(x, np.zeros(len(x)), np.ones(len(x)))
+    nf, df = len(x), np.abs(x[1] - x[0])
+    _, yg = np.meshgrid(x, x)
+    amat, nterms = [], []
+    for fc, fw, cutoff in zip(filter_centers, filter_half_widths, eigenval_cutoff):
+        Nw = 2 * nf * df * fw + 2 / np.pi ** 2 * np.log(4 * nf) * np.log(4 / (cutoff * (1 - cutoff)))
+        dpss_vectors, eigvals = windows.dpss(nf, nf * df * fw, int(min(Nw, nf)), return_ratios=True)
+        nterms.append(np.max(np.where(eigvals >= cutoff)))
+        amat.append(np.exp(2j * np.pi * (yg[:, :nterms[-1]] - x[nf // 2]) * fc) * dpss_vectors[:nterms[-1]].T)
+    return np.hstack(amat)[~inserted, :], nterms
+
+
+@pytest.mark.parametrize("nx, missing", [(48, []), (400, [0, 7, 8, 9, 250]), (1000, [1, 2, 3, 700, 999])])
+def test_dpss_operator_matches_full_taper_request(nx, missing):
+    # dpss_operator requests only about as many tapers as it keeps above eigenval_cutoff, falling back to the
+    # full bound when that is too few or a ratio is within roundoff of the cutoff. Check that it keeps the same
+    # tapers, equal to roundoff, as requesting the full bound, from narrow to wide filters, for loose to tight
+    # cutoffs, and for samples with gaps (e.g. integrations, in seconds since JD 0, with some missing)
+    dx = 9.663
+    x = 2459935.2 * 86400 + dx * np.delete(np.arange(nx), missing)
+    for NW in [0.01, 0.3, 2, 10, min(nx / 5, 20)]:
+        fw = NW / (nx * dx)
+        for cutoff in [1e-3, 1e-6, 1e-9, 1e-12, 1e-13]:
+            amat, nterms = dspec.dpss_operator(x, [0.4e-3], [fw], eigenval_cutoff=[cutoff])
+            amat_full, nterms_full = _dpss_operator_full_bound(x, [0.4e-3], [fw], [cutoff])
+            assert nterms == nterms_full
+            np.testing.assert_allclose(amat, amat_full, rtol=0, atol=1e-11)
+
+    # several filter windows, each with its own cutoff
+    fws, cutoffs = [0.3 / (nx * dx), 3 / (nx * dx)], [1e-12, 1e-6]
+    amat, nterms = dspec.dpss_operator(x, [0., -1e-3], fws, eigenval_cutoff=cutoffs)
+    amat_full, nterms_full = _dpss_operator_full_bound(x, [0., -1e-3], fws, cutoffs)
+    assert nterms == nterms_full
+    np.testing.assert_allclose(amat, amat_full, rtol=0, atol=1e-11)
+
+    # the samples dpss_operator computes the tapers on (gaps filled), and their spacing
+    xfull, _, _, inserted = dspec.place_data_on_uniform_grid(x, np.zeros(len(x)), np.ones(len(x)))
+    nf, df = len(xfull), np.abs(xfull[1] - xfull[0])
+
+    # a cutoff within roundoff of one of the ratios falls back to requesting the full bound, so results are identical
+    fw = 2 / (nx * dx)
+    eigvals = windows.dpss(nf, nf * df * fw, 30, return_ratios=True)[1]
+    cutoff = eigvals[eigvals > 1e-9][-1]
+    amat, nterms = dspec.dpss_operator(x, [0.4e-3], [fw], eigenval_cutoff=[cutoff])
+    amat_full, nterms_full = _dpss_operator_full_bound(x, [0.4e-3], [fw], [cutoff])
+    assert nterms == nterms_full
+    np.testing.assert_array_equal(amat, amat_full)
+
+    # with nterms given, the tapers come from the same call as before, so the only change, to how they are
+    # phased, must leave the results identical
+    _, yg = np.meshgrid(xfull, xfull)
+    for fw, nt in [(0.3 / (nx * dx), 3), (10 / (nx * dx), 22)]:
+        amat_meshgrid = np.exp(2j * np.pi * (yg[:, :nt] - xfull[nf // 2]) * 0.4e-3) * windows.dpss(nf, nf * df * fw, nt).T
+        np.testing.assert_array_equal(dspec.dpss_operator(x, [0.4e-3], [fw], nterms=[nt])[0], amat_meshgrid[~inserted])
+
+    # no taper above the cutoff still raises
+    pytest.raises(ValueError, dspec.dpss_operator, x, [0.], [0.01 / (nx * dx)], eigenval_cutoff=[0.5])
+
+
 def test_fit_solution_matrix():
     #test for dft and dpss
     fs = np.arange(-50,50)
